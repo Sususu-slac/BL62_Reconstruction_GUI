@@ -14,11 +14,13 @@ from .hdf5_inspector import inspect_hdf5
 from .image_view import ImageView
 from .runtime import save_settings
 from .models import GeometryMode
+from .analysis_progress import progress_view,format_duration
+from .curve_view import curve_view_bounds
 
 class AnalysisUiMixin:
     def _build_analysis_page(self):
         self.analysis_output=None;self.analysis_status={};self._analysis_image_key=None;self._curve_signature=None
-        self.analysis_started=0.;self.gpus=[]
+        self.analysis_started=0.;self.gpus=[];self._analysis_graph=None
         page=QSplitter(Qt.Orientation.Horizontal)
         left=QWidget();layout=QVBoxLayout(left);layout.setContentsMargins(0,0,4,0)
         task=QGroupBox('Task');form=QVBoxLayout(task)
@@ -36,10 +38,11 @@ class AnalysisUiMixin:
         page.addWidget(scroll)
         right=QWidget();r=QVBoxLayout(right);r.setContentsMargins(5,0,0,0)
         progress=QGroupBox();p=QVBoxLayout(progress)
-        row=QHBoxLayout();self.analysis_stage=QLabel('Ready');self.analysis_stage.setStyleSheet('font-weight:600;')
-        self.analysis_round_progress=QLabel();self.analysis_elapsed=QLabel('Elapsed 00:00')
+        row=QHBoxLayout();self.analysis_stage=QLabel('Ready');self.analysis_stage.setStyleSheet('font-weight:600;');self.analysis_stage.setWordWrap(True)
+        self.analysis_round_progress=QLabel();self.analysis_elapsed=QLabel('Total elapsed 00:00')
         row.addWidget(self.analysis_stage);row.addStretch();row.addWidget(self.analysis_round_progress);row.addWidget(self.analysis_elapsed);p.addLayout(row)
-        self.analysis_progress=QProgressBar();self.analysis_progress.setRange(0,1);self.analysis_progress.setValue(0);p.addWidget(self.analysis_progress);r.addWidget(progress)
+        self.analysis_progress=QProgressBar();self.analysis_progress.setRange(0,1);self.analysis_progress.setValue(0);p.addWidget(self.analysis_progress)
+        self.analysis_detail=QLabel();self.analysis_detail.setWordWrap(True);self.analysis_detail.hide();p.addWidget(self.analysis_detail);r.addWidget(progress)
         viewing=QGroupBox();v=QVBoxLayout(viewing)
         row=QHBoxLayout();row.addWidget(QLabel('Best Reconstruction'));row.addStretch()
         self.analysis_open=QPushButton('Open Output');self.analysis_open.clicked.connect(self._open_analysis_output);row.addWidget(self.analysis_open);v.addLayout(row)
@@ -48,8 +51,13 @@ class AnalysisUiMixin:
         self.analysis_parameters=QLabel('Round: —     Step: —     Slice: —');row.addWidget(self.analysis_center);row.addStretch();row.addWidget(self.analysis_parameters);v.addLayout(row)
         r.addWidget(viewing,1)
         chart_box=QGroupBox('Rotation Center Score');chart_layout=QVBoxLayout(chart_box)
+        controls=QHBoxLayout();self.analysis_range_label=QLabel('Search range: —');controls.addWidget(self.analysis_range_label);controls.addStretch()
+        self.analysis_auto_zoom=QCheckBox('Auto Zoom');self.analysis_auto_zoom.setChecked(True);self.analysis_auto_zoom.toggled.connect(self._apply_curve_view)
+        self.analysis_global=QPushButton('Global');self.analysis_global.clicked.connect(self._show_global_curve)
+        controls.addWidget(self.analysis_auto_zoom);controls.addWidget(self.analysis_global);chart_layout.addLayout(controls)
         self.analysis_plot=pg.PlotWidget(background='#0d1723');self.analysis_plot.setMinimumHeight(160);self.analysis_plot.setMaximumHeight(240)
         self.analysis_plot.setLabel('bottom','Rotation Center',units='px');self.analysis_plot.setLabel('left','Confidence-weighted Score');self.analysis_plot.showGrid(x=True,y=True,alpha=.15)
+        self.analysis_plot.getAxis('bottom').enableAutoSIPrefix(False)
         self.raw_curve=self.analysis_plot.plot([],[],pen=None,symbol='o',symbolSize=3,symbolBrush='#71869b',symbolPen=None)
         self.filtered_curve=self.analysis_plot.plot([],[],pen=pg.mkPen('#eab675',width=2))
         self.best_marker=pg.InfiniteLine(angle=90,pen=pg.mkPen('#6fe1bd',style=Qt.PenStyle.DashLine));self.best_marker.hide();self.analysis_plot.addItem(self.best_marker)
@@ -97,10 +105,12 @@ class AnalysisUiMixin:
             output=parent/f'{source.stem}_analysis_{datetime.now():%Y%m%d_%H%M%S_%f}'
             config={**self.settings,'input':str(source.resolve()),'output':str(output.resolve()),'prompt':self.analysis_prompt.text().strip(),'segment_all':self.segment_all.isChecked()}
             self.log_box.clear();self.analysis_status={};self._analysis_image_key=None;self._curve_signature=None
+            self._analysis_graph=None;self.analysis_auto_zoom.setChecked(True);self.analysis_range_label.setText('Search range: —')
             self.raw_curve.setData([],[]);self.filtered_curve.setData([],[]);self.best_marker.hide()
             self.analysis_center.setText('Rotation Center: —');self.analysis_parameters.setText('Round: —     Step: —     Slice: —')
             self.analysis_view.reset('Finding the best reconstruction…');self.analysis_output=output;self.analysis_started=time.monotonic()
-            self.analysis_stage.setText('Starting');self.analysis_progress.setRange(0,0);self.analysis_elapsed.setText('Elapsed 00:00')
+            self.analysis_stage.setText('Preparing analysis');self.analysis_progress.setRange(0,0);self.analysis_elapsed.setText('Total elapsed 00:00')
+            self.analysis_round_progress.clear();self.analysis_detail.clear();self.analysis_detail.hide()
             self.append_log(f'Automatic analysis output: {output}')
             self.analysis_runner.start(config);self._update_busy()
         except Exception as error:
@@ -108,12 +118,12 @@ class AnalysisUiMixin:
             self._update_busy();QMessageBox.critical(self,'Cannot start analysis',str(error))
 
     def _analysis_updated(self,status):
-        self.analysis_status=status;self.analysis_stage.setText(status.get('stage','Running'))
+        self.analysis_status=status;view=progress_view(status,self.segment_all.isChecked());self.analysis_stage.setText(view['title'])
         if self.analysis_runner.stopping:self.analysis_stage.setText('Stopping safely…')
-        total=int(status.get('total',0));done=int(status.get('completed',0));round_number=status.get('round')
-        self.analysis_round_progress.setText((f'Round {round_number} · ' if round_number else '')+f'{done} / {total}')
-        if status.get('indeterminate'):self.analysis_progress.setRange(0,0)
-        else:self.analysis_progress.setRange(0,max(1,total));self.analysis_progress.setValue(min(done,total))
+        self.analysis_round_progress.setText(view['count']);self.analysis_progress.setFormat(view['format'])
+        if view['indeterminate']:self.analysis_progress.setRange(0,0)
+        else:self.analysis_progress.setRange(0,max(1,view['total']));self.analysis_progress.setValue(view['completed'])
+        self.analysis_detail.setText(view['detail']);self.analysis_detail.setVisible(bool(view['detail']))
         if status.get('error'):self.append_log(status['error'])
 
     def _refresh_analysis_preview(self):
@@ -139,18 +149,37 @@ class AnalysisUiMixin:
                     self.raw_curve.setData(graph['centers'],graph['scores'])
                     values=graph['curve'];x=values['start']+np.arange(len(values['scores']))*values['step']
                     self.filtered_curve.setData(x,values['scores']);self.best_marker.setPos(graph['best_center']);self.best_marker.show()
+                    self._analysis_graph=graph;self._apply_curve_view()
             except (OSError,ValueError,KeyError):pass
+
+    def _apply_curve_view(self,*_args):
+        graph=self._analysis_graph
+        if not graph:return
+        low,high,ylow,yhigh=curve_view_bounds(graph,self.analysis_auto_zoom.isChecked())
+        self.analysis_plot.setXRange(low,high,padding=0);self.analysis_plot.setYRange(ylow,yhigh,padding=0)
+        intervals=graph.get('view_intervals',[])
+        label='; '.join(f'{a:g}–{b:g}' for a,b in intervals)
+        self.analysis_range_label.setText('Search range: '+(label+' px' if label else 'Global'))
+
+    def _show_global_curve(self):
+        self.analysis_auto_zoom.setChecked(False);self._apply_curve_view()
 
     def _analysis_tick(self):
         if self.analysis_runner.running and self.analysis_started:
-            seconds=int(time.monotonic()-self.analysis_started);self.analysis_elapsed.setText(f'Elapsed {seconds//60:02d}:{seconds%60:02d}')
+            seconds=int(time.monotonic()-self.analysis_started);self.analysis_elapsed.setText(f'Total elapsed {format_duration(seconds)}')
 
     def _stop_analysis(self):
         self.analysis_runner.stop();self.analysis_stop.setEnabled(False);self.analysis_stage.setText('Stopping safely…')
 
     def _analysis_finished(self,ok,message):
         self.analysis_runner.poll();self._refresh_analysis_preview();self._analysis_tick()
-        self.analysis_stage.setText(message);self.append_log(f'Analysis {message}: {self.analysis_output}');self._update_busy()
+        self.analysis_stage.setText('All tasks completed' if ok else message)
+        if self.analysis_status.get('stage') in ('Completed','Stopped','Failed'):
+            elapsed=self.analysis_status.get('elapsed_seconds',0)
+        else:
+            elapsed=time.monotonic()-self.analysis_started if self.analysis_started else 0
+        self.analysis_elapsed.setText('Total elapsed '+format_duration(elapsed))
+        self.append_log(f'Analysis {message}: {self.analysis_output}');self._update_busy()
         if ok:
             try:
                 summary=json.loads((self.analysis_output/'analysis_summary.json').read_text())

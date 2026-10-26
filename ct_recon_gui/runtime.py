@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
 WORKER_ROOT = APP_ROOT/'worker_code' if getattr(sys,'frozen',False) else APP_ROOT
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 
 def conda_python(name: str) -> str:
     roots = [Path(sys.prefix).parent.parent]

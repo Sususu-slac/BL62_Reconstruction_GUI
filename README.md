@@ -5,7 +5,7 @@ Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted 
 ## Windows installation
 
 1. Install the NVIDIA driver and Miniforge.
-2. Run `BL62_Reconstruction_GUI_Setup_1.0.0.exe`, or extract the portable ZIP.
+2. Run `BL62_Reconstruction_GUI_Setup_1.0.1.exe`, or extract the portable ZIP.
 3. Use **Install Environments** to prepare two isolated native Windows environments:
    - `tomocupy_astra`: reconstruction (Python 3.10).
    - `SAM3p1`: SAM3 inference (Python 3.12, PyTorch 2.10.0 CUDA 12.8).
@@ -61,3 +61,5 @@ python tests\integration_workflows.py --input DATA.hdf5 --output GLOBAL_TEST --g
 Build the Windows executable and installer with `build_windows.ps1` (PyInstaller and Inno Setup 6 required). The build script prepares `runtime_sam3` from the pinned upstream commit automatically when needed (`python prepare_sam3_source.py`). Checkpoint binaries remain external.
 
 See `VALIDATION.md` for actual release tests and their scope. See `THIRD_PARTY_NOTICES.md` and `licenses/SAM_LICENSE` for SAM3 attribution and terms.
+
+Version 1.0.1: progress identifies the current phase, segmentation explicitly follows completed reconstruction, long elapsed times use HH:MM:SS, score plots follow current search intervals while global cumulative filtering is preserved, and segmentation writes per-slice timings.csv plus timing_summary.json.

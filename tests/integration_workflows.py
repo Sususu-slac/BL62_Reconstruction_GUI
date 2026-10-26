@@ -24,7 +24,7 @@ def main():
     parser.add_argument('--gpu',type=int,default=0);parser.add_argument('--manual-only',action='store_true');parser.add_argument('--auto-only',action='store_true');parser.add_argument('--global-search',action='store_true');parser.add_argument('--segment-all',action='store_true');args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True);app=QApplication([]);window=MainWindow();window.show()
     source_before=(args.input.stat().st_size,args.input.stat().st_mtime_ns)
-    results=[];heartbeat=[];last=[time.perf_counter()];active={};queue=[]
+    results=[];heartbeat=[];last=[time.perf_counter()];active={};queue=[];progress_events=[]
     clock=QTimer();clock.setInterval(50)
     def beat():
         now=time.perf_counter();heartbeat.append(now-last[0]);last[0]=now
@@ -44,6 +44,7 @@ def main():
         report={'cases':results,'all_passed':bool(results) and all(r['passed'] for r in results),
                 'heartbeat_max_ms':round(max(heartbeat or [0])*1000,1),'heartbeat_p99_ms':round(float(np.percentile(heartbeat or [0],99))*1000,1),
                 'input_unchanged':source_before==(args.input.stat().st_size,args.input.stat().st_mtime_ns)}
+        (args.output/'progress_events.json').write_text(json.dumps(progress_events,indent=2))
         (args.output/'integration_report.json').write_text(json.dumps(report,indent=2));print(json.dumps(report,indent=2),flush=True)
         window.close();QTimer.singleShot(1000,app.quit)
     def next_case():
@@ -101,10 +102,26 @@ def main():
                 assert window.analysis_view._pixmap is not None,'Best image not displayed'
                 assert '102' in window.analysis_center.text(),'Center not displayed'
                 assert window.filtered_curve.getData()[0] is not None,'Curve not displayed'
+                segmented_events=[e for e in progress_events if e['phase']=='segmentation']
+                if args.segment_all:
+                    assert segmented_events,'No segmentation progress received'
+                    assert all('Reconstruction completed — segmenting all data' in e['title'] for e in segmented_events)
+                    assert all('Round' not in e['counter'] for e in segmented_events)
+                    assert summary['segmentation_timings']['images']==5
+                    assert (window.analysis_output/'segmentation/timings.csv').exists()
+                assert 'reconstruction' in summary['phase_timings_seconds']
                 window.grab().save(str(args.output/'automatic_complete.png'))
             results.append({'case':active['name'],'passed':True,'seconds':time.perf_counter()-active['started']})
             QTimer.singleShot(200,next_case)
         except Exception as error:fail(error)
+    def record_progress(status):
+        if active.get('kind') not in ('automatic','auto_stop'):return
+        event={k:status.get(k) for k in ('stage','phase','completed','total','round','detail')}
+        event.update(title=window.analysis_stage.text(),counter=window.analysis_round_progress.text())
+        progress_events.append(event)
+        if status.get('phase')=='segmentation' and status.get('completed',0)>0:
+            window.grab().save(str(args.output/'segmentation_progress.png'))
+    window.analysis_runner.updated.connect(record_progress)
     window.runner.finished.connect(manual_done);window.analysis_runner.finished.connect(auto_done)
     QTimer.singleShot(700,next_case);QTimer.singleShot(1800000,lambda:fail('Integration test timeout'))
     with patch.object(QMessageBox,'critical',side_effect=dialog_error),patch.object(QMessageBox,'warning',side_effect=dialog_error):app.exec()

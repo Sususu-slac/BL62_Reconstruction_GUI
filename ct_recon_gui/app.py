@@ -12,13 +12,14 @@ from .main_window import MainWindow
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("BL62 Reconstruction")
-    app.setApplicationVersion('1.0.0')
+    from .runtime import VERSION
+    app.setApplicationVersion(VERSION)
     window = MainWindow()
     window.show()
     if '--self-test' in sys.argv:
         from .runtime import APP_ROOT,WORKER_ROOT,reconstruction_python
         target=Path(sys.argv[sys.argv.index('--self-test')+1]);app.processEvents()
-        report={'tabs':window.main_tabs.count(),'manual_methods':window.method_combo.count(),
+        report={'version':VERSION,'tabs':window.main_tabs.count(),'manual_methods':window.method_combo.count(),
             'log_collapsed':not window.log_toggle.isChecked(),'segment_all':window.segment_all.isChecked(),
             'reconstruction_python':reconstruction_python(),
             'backend_present':(WORKER_ROOT/'backend_runner.py').is_file(),

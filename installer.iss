@@ -1,7 +1,7 @@
 [Setup]
 AppId={{329E0D17-54DD-493E-86F5-FAC513D32627}
 AppName=BL62 Reconstruction
-AppVersion=1.0.0
+AppVersion=1.0.1
 AppPublisher=BL62
 AppPublisherURL=https://github.com/Sususu-slac/BL62_Reconstruction_GUI
 DefaultDirName={localappdata}\Programs\BL62_Reconstruction_GUI
@@ -10,7 +10,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=release
-OutputBaseFilename=BL62_Reconstruction_GUI_Setup_1.0.0
+OutputBaseFilename=BL62_Reconstruction_GUI_Setup_1.0.1
 SetupIconFile=BL62_Recon.ico
 UninstallDisplayIcon={app}\BL62_Reconstruction_GUI.exe
 Compression=lzma2

@@ -48,6 +48,36 @@ class GuiSmokeTest(unittest.TestCase):
         job=window._job('full');self.assertIsInstance(job.mode,GeometryMode);self.assertIsInstance(job.method,ReconMethod)
         window.close()
 
+    def test_segmentation_widget_identifies_reconstruction_as_completed(self):
+        window=MainWindow()
+        window._analysis_updated(dict(stage='Segmenting',round=7,completed=10,total=2048,
+                                      detail='Image 11/2048 · Saving masks'))
+        self.assertIn('Reconstruction completed — segmenting all data',window.analysis_stage.text())
+        self.assertEqual(window.analysis_round_progress.text(),'10 / 2048 images')
+        self.assertEqual(window.analysis_progress.value(),10)
+        self.assertIn('Saving masks',window.analysis_detail.text());window.close()
+
+    def test_forced_stop_does_not_reset_elapsed_to_old_worker_status(self):
+        import time
+        window=MainWindow();window.analysis_status={'stage':'Loading SAM3','elapsed_seconds':2}
+        window.analysis_started=time.monotonic()-73
+        window._analysis_finished(False,'Stopped')
+        self.assertEqual(window.analysis_elapsed.text(),'Total elapsed 01:13');window.close()
+
+    def test_curve_widget_zooms_to_search_but_retains_global_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            import json
+            graph={'centers':[0,1020,1025,1030,2047],'scores':[1,100,104,101,1],'best_center':1025,
+                   'curve':{'start':0,'step':1,'scores':[float(1+100*np.exp(-((x-1025)/100)**2)) for x in range(2048)]},
+                   'filter_bounds':[0,2047],'view_intervals':[[1020,1030]]}
+            path=Path(temp)/'plot.json';path.write_text(json.dumps(graph))
+            window=MainWindow();window.analysis_status={'curve_file':str(path)};window._refresh_analysis_preview()
+            low,high=window.analysis_plot.viewRange()[0]
+            self.assertLess(high-low,20);self.assertLessEqual(low,1020);self.assertGreaterEqual(high,1030)
+            self.assertEqual(len(window.filtered_curve.getData()[0]),2048)
+            window._show_global_curve();low,high=window.analysis_plot.viewRange()[0]
+            self.assertAlmostEqual(low,0);self.assertAlmostEqual(high,2047);window.close()
+
     def test_result_watcher_ignores_old_files_but_detects_updated_file(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp); path = output / "recon_00001.tiff"

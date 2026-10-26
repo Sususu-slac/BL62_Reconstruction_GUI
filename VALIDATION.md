@@ -47,3 +47,7 @@ The standalone GUI build uses separate worker source directories so Python 3.12 
 - Final packaged EXE: manual FBP_CUDA reconstructed five slices successfully.
 - The same EXE then ran a fresh center search using its **bundled SAM3 source**, reconstructed five slices, segmented all five, and displayed the best image and score curve. Recommended center: 1028.50 px.
 - Release executable launch and runtime discovery passed; source worker files are under `_internal/worker_code`, separated from display extension modules.
+
+## Version 1.0.1 follow-up
+
+57 automated tests passed. Real-data source GUI progress, five-image reconstruction/segmentation, detailed timing output and Safe Stop passed. A saved-log display replay retained all 8189 global curve points while zooming to the current 1017–1031.75 px search range. The packaged EXE also passed manual and automatic workflows. See `SEGMENTATION_TIMING_1.0.1.md` for measured per-operation timings and exact scope.
