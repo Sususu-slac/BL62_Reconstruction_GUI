@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.spec
+build/
+dist/
+release/
+test_outputs/
+runtime_sam3/
+worker_code/
+native_sam3_probe.*
+*.pt
+*.pth
+*.h5
+*.hdf5
+*.tif
+*.tiff
+*.zip
+*.exe
+*.lnk
+.pytest_cache/
+
+# Local previews, installed binaries and validation data
+_internal/
+design_preview*/
+gui_preview.png
+Validation_*/
+unins*
