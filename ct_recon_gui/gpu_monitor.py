@@ -22,12 +22,14 @@ class GpuMonitor(QObject):
     def __init__(self,parent=None):
         super().__init__(parent);self.process=QProcess(self)
         self.process.finished.connect(self._finished)
-        self.process.errorOccurred.connect(lambda _error:self.updated.emit([]))
+        self.process.errorOccurred.connect(self._error)
         self.timer=QTimer(self);self.timer.setInterval(2500);self.timer.timeout.connect(self.refresh)
         self.timer.start();QTimer.singleShot(100,self.refresh)
     def refresh(self):
         if self.process.state()!=QProcess.ProcessState.NotRunning:return
         self.process.start('nvidia-smi',['--query-gpu=index,name,memory.total,memory.used,utilization.gpu','--format=csv,noheader,nounits'])
+    def _error(self,_error):
+        self.updated.emit([])
     def _finished(self,code,_status):
         gpus=[]
         if code==0:

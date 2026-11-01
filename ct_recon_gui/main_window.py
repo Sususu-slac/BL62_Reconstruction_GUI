@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (
 from .analysis_ui import AnalysisUiMixin
 from .analysis_runner import AnalysisRunner
 from .gpu_monitor import GpuMonitor, GpuSelector
-from .runtime import APP_ROOT, load_settings
+from .runtime import APP_ROOT, load_settings, save_theme_preference
+from .themes import colors_for, palette_for, stylesheet_for, theme_name
 from .commands import build_wsl_argv, display_command
 from .exporter import ExportJob, ExportWorker
 from .hdf5_inspector import Hdf5Info, frame_count, inspect_hdf5, read_input_frame
@@ -74,6 +75,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.runner.result_found.connect(self._new_result)
         self.runner.finished.connect(self._job_finished)
         self.settings = load_settings()
+        self.theme_name = theme_name(self.settings.get('theme'))
         self.analysis_runner = AnalysisRunner(self)
         self.analysis_runner.log.connect(self.append_log)
         self.analysis_runner.updated.connect(self._analysis_updated)
@@ -89,11 +91,14 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.gpu_monitor.updated.connect(self._gpu_updated)
 
     def _build_ui(self) -> None:
-        root = QWidget(); outer = QVBoxLayout(root)
+        root = QWidget();root.setObjectName('appSurface'); outer = QVBoxLayout(root)
         self.setWindowIcon(QIcon(str(APP_ROOT / 'BL62_Recon.ico')))
         header = QHBoxLayout(); title = QLabel('BL62 Reconstruction'); title.setObjectName('title')
         header.addWidget(title); header.addStretch()
         self.backend_status = QLabel(); self.backend_status.setObjectName('statusPill'); header.addWidget(self.backend_status)
+        self.theme_button=QPushButton();self.theme_button.setObjectName('themeToggle')
+        self.theme_button.setAccessibleName('Color Theme');self.theme_button.clicked.connect(self._toggle_theme)
+        header.addWidget(self.theme_button)
         outer.addLayout(header)
         self.main_tabs = QTabWidget()
         horizontal = QSplitter(Qt.Orientation.Horizontal)
@@ -170,11 +175,13 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.type_combo.setCurrentIndex(self.type_combo.findData("full"))
         center_row = QWidget(); center_layout = QHBoxLayout(center_row); center_layout.setContentsMargins(0, 0, 0, 0)
         self.center_settings_btn = QPushButton("⚙"); self.center_settings_btn.setFixedWidth(34); self.center_settings_btn.clicked.connect(self._open_center_settings)
+        self.center_settings_btn.setObjectName('compactSettings')
         self.find_center_btn = QPushButton("Find Center"); self.find_center_btn.clicked.connect(lambda: self._start_search("center"))
         self.find_center_btn.setFixedSize(92,34); self.center_settings_btn.setFixedSize(28,34); self.center_spin.setMinimumWidth(70); self.center_spin.setFixedHeight(34)
         center_layout.addWidget(self.center_spin, 1); center_layout.addWidget(self.center_settings_btn); center_layout.addWidget(self.find_center_btn)
         lamino_row = QWidget(); lamino_layout = QHBoxLayout(lamino_row); lamino_layout.setContentsMargins(0, 0, 0, 0)
         self.lamino_settings_btn = QPushButton("⚙"); self.lamino_settings_btn.setFixedWidth(34); self.lamino_settings_btn.clicked.connect(self._open_lamino_settings)
+        self.lamino_settings_btn.setObjectName('compactSettings')
         self.find_angle_btn = QPushButton("Find Angle"); self.find_angle_btn.clicked.connect(lambda: self._start_search("angle"))
         self.find_angle_btn.setFixedSize(92,34); self.lamino_settings_btn.setFixedSize(28,34); self.lamino_spin.setMinimumWidth(70); self.lamino_spin.setFixedHeight(34)
         lamino_layout.addWidget(self.lamino_spin, 1); lamino_layout.addWidget(self.lamino_settings_btn); lamino_layout.addWidget(self.find_angle_btn)
@@ -858,29 +865,27 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         event.accept()
 
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QWidget { background:#0b1018; color:#eaf0fa; font-family:'Segoe UI'; font-size:13px; }
-            QGroupBox { border:1px solid #293348; border-radius:8px; margin-top:12px; padding-top:10px; font-weight:600; }
-            QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; }
-            QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QPlainTextEdit { background:#121a28; border:1px solid #303c52; border-radius:5px; padding:6px; }
-            QLineEdit:disabled,QComboBox:disabled,QSpinBox:disabled,QDoubleSpinBox:disabled,QPlainTextEdit:disabled {
-                background:#0d131d; color:#627087; border-color:#202a3a;
-            }
-            QSpinBox,QDoubleSpinBox { padding-right:26px; }
-            QSpinBox::up-button,QSpinBox::down-button,QDoubleSpinBox::up-button,QDoubleSpinBox::down-button { width:24px; }
-            QPushButton { background:#1a2637; border:1px solid #34445e; border-radius:6px; padding:8px 12px; }
-            QPushButton:hover { background:#23344c; }
-            QPushButton:disabled { background:#0d131d; color:#5b687d; border-color:#202a3a; }
-            QPushButton#primaryButton { background:#16c79a; color:#07120f; font-weight:700; }
-            QPushButton#primaryButton:disabled { background:#0d131d; color:#5b687d; border-color:#202a3a; }
-            QScrollBar:vertical { background:#0d131d; width:14px; margin:2px; border:none; border-radius:7px; }
-            QScrollBar::handle:vertical { background:#34445e; min-height:34px; border-radius:5px; }
-            QScrollBar::handle:vertical:hover { background:#16c79a; }
-            QScrollBar::handle:vertical:pressed { background:#12a981; }
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height:0px; background:transparent; border:none; }
-            QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical { background:transparent; }
-            QLabel#title { font-size:24px; font-weight:700; }
-            QLabel#statusPill { background:#15253a; color:#7de3c8; border-radius:10px; padding:6px 12px; }
-            QLabel#jobState { font-size:22px; font-weight:700; color:#7de3c8; }
-            QTabWidget::pane { border:1px solid #293348; }
-        """)
+        import pyqtgraph as pg
+        from .instance_dialog import MaskCanvas
+        c=colors_for(self.theme_name)
+        self.setAttribute(Qt.WidgetAttribute.WA_WindowPropagation,True)
+        self.setPalette(palette_for(self.theme_name));self.setStyleSheet(stylesheet_for(self.theme_name))
+        target='Dark' if self.theme_name=='light' else 'Light'
+        self.theme_button.setText('Switch to '+target)
+        self.theme_button.setToolTip('Switch to '+target)
+        self.analysis_plot.setBackground(c['plot'])
+        for name in ('bottom','left'):
+            axis=self.analysis_plot.getAxis(name);axis.setPen(c['axis']);axis.setTextPen(c['axis'])
+            axis.setLabel(text=axis.labelText,units=axis.labelUnits,unitPrefix=axis.labelUnitPrefix,
+                siPrefixEnableRanges=axis.getSIPrefixEnableRanges(),unitPower=axis.unitPower,
+                **{**axis.labelStyle,'color':c['axis']})
+        self.raw_curve.setSymbolBrush(pg.mkBrush(c['raw']))
+        self.filtered_curve.setPen(pg.mkPen(c['curve'],width=2))
+        self.best_marker.setPen(pg.mkPen(c['marker'],style=Qt.PenStyle.DashLine))
+        for canvas in self.findChildren(MaskCanvas):canvas.set_theme(self.theme_name)
+
+    def _toggle_theme(self):
+        self.theme_name='light' if self.theme_name=='dark' else 'dark'
+        self.settings['theme']=self.theme_name;self._apply_style()
+        try:save_theme_preference(self.theme_name)
+        except OSError as error:self.statusBar().showMessage(f'Could not save the theme preference: {error}',8000)

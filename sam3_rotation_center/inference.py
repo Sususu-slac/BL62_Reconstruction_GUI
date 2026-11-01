@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import time
+import types
 from PIL import Image
 
 
@@ -119,3 +120,54 @@ class Sam3ParticleSegmenter:
                 masks[first:last] = (expanded > 0.5).squeeze(1).cpu().numpy()
                 del expanded
         return Prediction(masks=masks, scores=scores)
+
+
+class Sam3InstanceSegmenter(Sam3ParticleSegmenter):
+    """One frozen reference mask reused for every candidate and output slice.
+
+    The installed SAM3 geometry encoder has no native mask encoder. Instead,
+    isolate painted pixels BEFORE backbone extraction, encode their positive
+    visual box on the REFERENCE image, and inject those cached visual tokens.
+    Never apply the reference box/mask coordinates to a target image.
+    """
+    def __init__(self, checkpoint: Path, *, example, **kwargs):
+        from .exemplar import isolated_reference, mask_box
+        kwargs.pop('prompt', None)
+        super().__init__(checkpoint, prompt='visual', **kwargs)
+        started = time.perf_counter()
+        example.validate()
+        image, fill = isolated_reference(example)
+        x0, y0, x1, y1 = mask_box(example.mask)
+        processor, network = self.processor, self.processor.model
+        original_encode = network._encode_prompt
+        context = torch.autocast('cuda', dtype=torch.bfloat16) if self.device.startswith('cuda') else nullcontext()
+        with torch.inference_mode(), context:
+            state = processor.set_image(image)
+            self._text_features = network.backbone.forward_text(['visual'], device=self.device)
+            state['backbone_out'].update(self._text_features)
+            prompt = network._get_dummy_prompt()
+            box = [(x0+x1)/2/image.width, (y0+y1)/2/image.height,
+                   (x1-x0)/image.width, (y1-y0)/image.height]
+            prompt.append_boxes(torch.tensor(box, device=self.device, dtype=torch.float32).reshape(1, 1, 4),
+                                torch.ones((1, 1), device=self.device, dtype=torch.bool))
+            tokens, attention, _ = original_encode(state['backbone_out'], processor.find_stage,
+                                                    prompt, encode_text=False)
+            self.reference_tokens = tokens.detach().clone()
+            self.reference_attention = attention.detach().clone()
+        self.instance_prepare_seconds = time.perf_counter()-started
+        self.instance_metadata = dict(encoding='mask_isolated_reference_box_features',
+            box_xyxy=[x0,y0,x1,y1], mask_pixels=int(np.count_nonzero(example.mask)), background_rgb=list(fill),
+            reference_size=list(example.image.size), token_shape=list(self.reference_tokens.shape),
+            native_mask_encoder_available=network.geometry_encoder.mask_encoder is not None,
+            prepare_seconds=self.instance_prepare_seconds, target_text='visual', reference_source=example.source)
+        reference_tokens, reference_attention = self.reference_tokens, self.reference_attention
+
+        def encode_with_reference(owned_network, backbone_out, find_input, geometric_prompt, **encode_kwargs):
+            if geometric_prompt.box_embeddings.shape[0] or geometric_prompt.point_embeddings.shape[0]:
+                raise RuntimeError('Reference coordinates must never be applied to a target image')
+            encode_kwargs.update(visual_prompt_embed=reference_tokens,
+                                 visual_prompt_mask=reference_attention, encode_text=True)
+            return original_encode(backbone_out, find_input, geometric_prompt, **encode_kwargs)
+
+        # Scoped to this worker's owned model; installed SAM3 source is untouched.
+        network._encode_prompt = types.MethodType(encode_with_reference, network)

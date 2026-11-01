@@ -26,7 +26,7 @@ class ImageView(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(520, 520)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background:#090d14; color:#8e9bb0; border:1px solid #273043;")
+        self.setObjectName('imageCanvas')
         self._pixmap: QPixmap | None = None
 
     def show_array(self, array: np.ndarray) -> None:

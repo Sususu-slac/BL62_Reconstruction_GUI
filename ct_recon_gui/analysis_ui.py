@@ -7,7 +7,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt,QTimer,QUrl
 from PySide6.QtGui import QDesktopServices,QImage,QPixmap
-from PySide6.QtWidgets import (QCheckBox,QDialog,QFileDialog,QGroupBox,QHBoxLayout,QLabel,QLineEdit,
+from PySide6.QtWidgets import (QCheckBox,QComboBox,QDialog,QFileDialog,QGroupBox,QHBoxLayout,QLabel,QLineEdit,
     QMessageBox,QProgressBar,QPushButton,QScrollArea,QSplitter,QVBoxLayout,QWidget)
 from .analysis_settings import AnalysisSettings
 from .hdf5_inspector import inspect_hdf5
@@ -16,6 +16,8 @@ from .runtime import save_settings
 from .models import GeometryMode
 from .analysis_progress import progress_view,format_duration
 from .curve_view import curve_view_bounds
+from .instance_dialog import InstanceDialog,pil_pixmap
+from sam3_rotation_center.exemplar import read_reference,example_preview
 
 class AnalysisUiMixin:
     def _build_analysis_page(self):
@@ -27,7 +29,19 @@ class AnalysisUiMixin:
         form.addWidget(QLabel('Input HDF5'))
         row=QHBoxLayout();self.analysis_input=QLineEdit();self.analysis_browse=QPushButton('Browse')
         self.analysis_browse.clicked.connect(self._choose_analysis_input);row.addWidget(self.analysis_input,1);row.addWidget(self.analysis_browse);form.addLayout(row)
-        form.addWidget(QLabel('Analysis Target'));self.analysis_prompt=QLineEdit('particle');form.addWidget(self.analysis_prompt)
+        form.addWidget(QLabel('Analysis Target'))
+        self.analysis_prompt_mode=QComboBox();self.analysis_prompt_mode.addItem('Text','text');self.analysis_prompt_mode.addItem('Instance','instance')
+        form.addWidget(self.analysis_prompt_mode)
+        self.analysis_prompt=QLineEdit('particle');form.addWidget(self.analysis_prompt)
+        self.analysis_example=None
+        self.analysis_instance_panel=QWidget();instance_layout=QVBoxLayout(self.analysis_instance_panel);instance_layout.setContentsMargins(0,0,0,0)
+        self.analysis_add_image=QPushButton('Add Image');self.analysis_add_image.clicked.connect(self._choose_instance_image);instance_layout.addWidget(self.analysis_add_image)
+        self.analysis_instance_preview=QLabel();self.analysis_instance_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.analysis_instance_preview.setFixedHeight(180);self.analysis_instance_preview.setMinimumWidth(180)
+        self.analysis_instance_preview.setObjectName('imageCanvas')
+        self.analysis_instance_preview.hide();instance_layout.addWidget(self.analysis_instance_preview)
+        form.addWidget(self.analysis_instance_panel);self.analysis_instance_panel.hide()
+        self.analysis_prompt_mode.currentIndexChanged.connect(self._analysis_prompt_changed)
         row=QHBoxLayout();self.segment_all=QCheckBox('Segment All');self.segment_all.setChecked(True);row.addWidget(self.segment_all);row.addStretch()
         self.analysis_settings_btn=QPushButton('⚙ Settings');self.analysis_settings_btn.clicked.connect(self._analysis_settings)
         row.addWidget(self.analysis_settings_btn);form.addLayout(row);layout.addWidget(task)
@@ -47,7 +61,7 @@ class AnalysisUiMixin:
         row=QHBoxLayout();row.addWidget(QLabel('Best Reconstruction'));row.addStretch()
         self.analysis_open=QPushButton('Open Output');self.analysis_open.clicked.connect(self._open_analysis_output);row.addWidget(self.analysis_open);v.addLayout(row)
         self.analysis_view=ImageView();self.analysis_view.setMinimumSize(320,220);self.analysis_view.reset('Start analysis to display the best reconstruction');v.addWidget(self.analysis_view,1)
-        row=QHBoxLayout();self.analysis_center=QLabel('Rotation Center: —');self.analysis_center.setStyleSheet('font-size:19px;font-weight:600;color:#a6e8d7;')
+        row=QHBoxLayout();self.analysis_center=QLabel('Rotation Center: —');self.analysis_center.setObjectName('analysisCenter')
         self.analysis_parameters=QLabel('Round: —     Step: —     Slice: —');row.addWidget(self.analysis_center);row.addStretch();row.addWidget(self.analysis_parameters);v.addLayout(row)
         r.addWidget(viewing,1)
         chart_box=QGroupBox('Rotation Center Score');chart_layout=QVBoxLayout(chart_box)
@@ -66,6 +80,27 @@ class AnalysisUiMixin:
         self.analysis_preview_timer.start()
         self.analysis_clock=QTimer(self);self.analysis_clock.setInterval(1000);self.analysis_clock.timeout.connect(self._analysis_tick);self.analysis_clock.start()
         return page
+
+    def _analysis_prompt_changed(self,*_args):
+        instance=self.analysis_prompt_mode.currentData()=='instance'
+        self.analysis_prompt.setVisible(not instance);self.analysis_instance_panel.setVisible(instance)
+
+    def _choose_instance_image(self):
+        path,_=QFileDialog.getOpenFileName(self,'Select Reference Image',self.analysis_example.source if self.analysis_example else 'D:/',
+            'Images (*.png *.tif *.tiff *.jpg *.jpeg *.bmp);;All Files (*)')
+        if not path:return
+        try:
+            image=read_reference(path)
+            dialog=InstanceDialog(image,path,self)
+            if dialog.exec()!=QDialog.DialogCode.Accepted:return
+            self._set_instance_example(dialog.example)
+        except Exception as error:QMessageBox.critical(self,'Cannot open reference image',str(error))
+
+    def _set_instance_example(self,example):
+        example.validate();self.analysis_example=example
+        pixmap=pil_pixmap(example_preview(example))
+        self.analysis_instance_preview.setPixmap(pixmap.scaled(260,164,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation))
+        self.analysis_instance_preview.setToolTip(example.source);self.analysis_instance_preview.show()
 
     def _choose_analysis_input(self):
         path,_=QFileDialog.getOpenFileName(self,'Select exchange HDF5',self.analysis_input.text() or 'D:/','HDF5 (*.h5 *.hdf5)')
@@ -93,7 +128,11 @@ class AnalysisUiMixin:
             source=Path(self.analysis_input.text().strip())
             if not self.analysis_input.text().strip():raise ValueError('Select an input HDF5 file')
             info=inspect_hdf5(source)
-            if not self.analysis_prompt.text().strip():raise ValueError('Enter an analysis target')
+            mode=self.analysis_prompt_mode.currentData()
+            if mode=='text' and not self.analysis_prompt.text().strip():raise ValueError('Enter an analysis target')
+            if mode=='instance':
+                if self.analysis_example is None:raise ValueError('Add a reference image and paint an instance')
+                self.analysis_example.validate()
             for key in ('sam3_python','recon_python','checkpoint'):
                 if not Path(self.settings[key]).is_file():raise ValueError(f'Configure {key} in Settings: {self.settings[key]}')
             if not (Path(self.settings['repo'])/'sam3').is_dir():raise ValueError('Select the SAM3 repository in Settings')
@@ -103,7 +142,9 @@ class AnalysisUiMixin:
             if start is not None and end-start<factor:raise ValueError('Selected range is smaller than the binning factor')
             parent=Path(self.settings['output_root']) if self.settings['output_root'] else source.parent
             output=parent/f'{source.stem}_analysis_{datetime.now():%Y%m%d_%H%M%S_%f}'
-            config={**self.settings,'input':str(source.resolve()),'output':str(output.resolve()),'prompt':self.analysis_prompt.text().strip(),'segment_all':self.segment_all.isChecked()}
+            config={**self.settings,'input':str(source.resolve()),'output':str(output.resolve()),
+                    'prompt_mode':mode,'prompt':self.analysis_prompt.text().strip() if mode=='text' else 'visual',
+                    'segment_all':self.segment_all.isChecked()}
             self.log_box.clear();self.analysis_status={};self._analysis_image_key=None;self._curve_signature=None
             self._analysis_graph=None;self.analysis_auto_zoom.setChecked(True);self.analysis_range_label.setText('Search range: —')
             self.raw_curve.setData([],[]);self.filtered_curve.setData([],[]);self.best_marker.hide()
@@ -112,7 +153,9 @@ class AnalysisUiMixin:
             self.analysis_stage.setText('Preparing analysis');self.analysis_progress.setRange(0,0);self.analysis_elapsed.setText('Total elapsed 00:00')
             self.analysis_round_progress.clear();self.analysis_detail.clear();self.analysis_detail.hide()
             self.append_log(f'Automatic analysis output: {output}')
-            self.analysis_runner.start(config);self._update_busy()
+            if mode=='instance':self.analysis_runner.start(config,instance_example=self.analysis_example)
+            else:self.analysis_runner.start(config)
+            self._update_busy()
         except Exception as error:
             self.analysis_stage.setText('Failed');self.analysis_progress.setRange(0,1);self.analysis_progress.setValue(0)
             self._update_busy();QMessageBox.critical(self,'Cannot start analysis',str(error))
@@ -210,4 +253,5 @@ class AnalysisUiMixin:
         self.find_angle_btn.setEnabled(not busy and self.mode_combo.currentData()==GeometryMode.LAMINOGRAPHY)
         self.gpu_spin.setEnabled(not busy);self.mode_combo.setEnabled(not busy)
         self.analysis_input.setEnabled(not automatic);self.analysis_browse.setEnabled(not automatic);self.analysis_prompt.setEnabled(not automatic);self.segment_all.setEnabled(not automatic)
+        self.analysis_prompt_mode.setEnabled(not automatic);self.analysis_add_image.setEnabled(not automatic)
         self.analysis_stop.setEnabled(automatic and not self.analysis_runner.stopping)

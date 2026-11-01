@@ -1,5 +1,10 @@
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
+# Conda Qt/Shiboken DLLs live outside site-packages. Include their directory
+# during dependency discovery, also when invoked without conda activation.
+$buildPythonPrefix = (& python -c 'import sys; print(sys.prefix)').Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Could not locate the build Python environment.' }
+$env:PATH = (Join-Path $buildPythonPrefix 'Library\bin') + ';' + $env:PATH
 if (-not (Test-Path 'runtime_sam3\sam3\model_builder.py')) {
  python prepare_sam3_source.py
  if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the pinned SAM3 source.' }
@@ -7,7 +12,7 @@ if (-not (Test-Path 'runtime_sam3\sam3\model_builder.py')) {
 python prepare_worker_code.py
 if ($LASTEXITCODE -ne 0) { throw 'Could not prepare isolated worker scripts.' }
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name BL62_Reconstruction_GUI --icon BL62_Recon.ico `
- --add-data 'BL62_Recon.ico;.' --add-data 'worker_code;worker_code' --add-data 'runtime_sam3;sam3_repo' `
+ --add-data 'BL62_Recon.ico;.' --add-data 'worker_code;worker_code' --add-data 'runtime_sam3;sam3_repo' --add-data 'docs\INSTANCE_PROMPT.md;docs' --add-data 'ct_recon_gui\theme_assets;ct_recon_gui/theme_assets' `
  --add-data 'environment.yml;.' --add-data 'requirements-sam3-windows.txt;.' --add-data 'prepare_environments.ps1;.' `
  --add-data 'verify_installation.py;.' --add-data 'verify_sam3.py;.' --add-data 'install_windows.bat;.' --add-data 'THIRD_PARTY_NOTICES.md;.' --add-data 'licenses;licenses' `
  --exclude-module torch --exclude-module torchvision --exclude-module cupy --exclude-module astra --exclude-module scipy --exclude-module matplotlib `

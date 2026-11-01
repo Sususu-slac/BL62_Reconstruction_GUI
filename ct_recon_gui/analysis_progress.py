@@ -24,6 +24,7 @@ def progress_view(status, segment_all=True):
         label={'Finding Center':'Finding rotation center',
                'Reconstructing Candidates':'Reconstructing center candidates',
                'Finalizing Center Search':'Saving rotation-center results',
+               'Preparing Instance':'Preparing reference example',
                'Loading SAM3':'Loading SAM3 model'}.get(stage,stage)
         result['title']=f'Stage 1/{stages} · {label}'
         if status.get('round') is not None:result['count']=f'Round {status["round"]}'

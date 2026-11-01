@@ -81,11 +81,19 @@ class Pipeline:
         if self.model is not None:return
         self.emit(stage='Loading SAM3',indeterminate=True)
         print('Loading SAM3 once; it remains resident until this analysis ends.',flush=True)
-        from sam3_rotation_center.inference import Sam3ParticleSegmenter
+        from sam3_rotation_center.inference import Sam3ParticleSegmenter,Sam3InstanceSegmenter
         t=time.perf_counter()
-        self.model=Sam3ParticleSegmenter(Path(self.cfg['checkpoint']),prompt=self.cfg['prompt'],
-            confidence_threshold=self.cfg['confidence'],device='cuda')
-        self.load_seconds=time.perf_counter()-t;self.check_cancel()
+        if self.cfg.get('prompt_mode','text')=='instance':
+            from sam3_rotation_center.exemplar import load_example
+            self.emit(stage='Preparing Instance',indeterminate=True,detail='Loading SAM3 and preparing the painted reference feature')
+            self.model=Sam3InstanceSegmenter(Path(self.cfg['checkpoint']),example=load_example(self.cfg['instance_reference']),
+                confidence_threshold=self.cfg['confidence'],device='cuda')
+            atomic_json(self.output/'instance_reference'/'encoding.json',self.model.instance_metadata)
+            print('Prepared one fixed mask-isolated reference; reusing it for search and segmentation.',flush=True)
+        else:
+            self.model=Sam3ParticleSegmenter(Path(self.cfg['checkpoint']),prompt=self.cfg['prompt'],
+                confidence_threshold=self.cfg['confidence'],device='cuda')
+        self.load_seconds=time.perf_counter()-t-getattr(self.model,'instance_prepare_seconds',0.);self.check_cancel()
 
     def candidates(self, centers, number):
         from sam3_rotation_center.data import parse_center
@@ -208,6 +216,7 @@ class Pipeline:
         shutil.copy2(cache[center]['file'],self.search/'best_reconstruction.tiff')
         summary=dict(recommended_center=center,final_step=step,rounds=len(history),unique_evaluations=len(cache),
                      score_method='confidence_reward',model_load_seconds=self.load_seconds,
+                     prompt_mode=self.cfg.get('prompt_mode','text'),instance_reference=getattr(self.model,'instance_metadata',None),
                      recommended_metrics=cache[center],final_peaks=decision['peaks'],
                      **recommendation(decision['peaks'],decision['score_scale']))
         atomic_json(self.search/'summary.json',summary)
@@ -303,10 +312,18 @@ class Pipeline:
         info=inspect_hdf5(self.cfg['input']);_,self.height,self.width=info.data_shape
         for key in ('recon_python','checkpoint'):
             if not Path(self.cfg[key]).is_file():raise FileNotFoundError(f'{key}: {self.cfg[key]}')
-        if not self.cfg['prompt'].strip():raise ValueError('Enter an analysis target')
+        mode=self.cfg.get('prompt_mode','text')
+        if mode not in ('text','instance'):raise ValueError('Unknown analysis target mode')
+        if mode=='text' and not self.cfg['prompt'].strip():raise ValueError('Enter an analysis target')
+        if mode=='instance':
+            from sam3_rotation_center.exemplar import load_example
+            load_example(self.cfg['instance_reference'])
         fingerprint={**self.cfg}
         for key in ('input','checkpoint'):
             stat=Path(self.cfg[key]).stat();fingerprint[key+'_fingerprint']=[stat.st_size,stat.st_mtime_ns]
+        if mode=='instance':
+            fingerprint['instance_fingerprints']={key:[Path(value).stat().st_size,Path(value).stat().st_mtime_ns]
+                for key,value in self.cfg['instance_reference'].items()}
         saved=self.output/'pipeline_config.json'
         if saved.exists() and json.loads(saved.read_text())!=fingerprint:raise ValueError('Cannot resume: input, checkpoint or settings changed')
         if (self.output/'analysis_summary.json').exists():raise FileExistsError('This analysis is already complete')

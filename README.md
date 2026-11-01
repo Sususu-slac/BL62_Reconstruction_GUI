@@ -1,11 +1,22 @@
 # BL62 Reconstruction GUI
 
+## Light / Dark
+
+Use the upper-right **Switch to Light** / **Switch to Dark** button. Each GUI
+remembers its own choice; new installations default to Dark. Light uses blue
+buttons and selected controls, while Dark keeps the original green accents.
+Dialogs, menus, logs, charts and progress bars follow the theme. Images, masks,
+annotation edits, histogram settings, training state and chat drafts are preserved.
+
+See [theme validation](THEME_VALIDATION_20261101.md) for the checks and their scope.
+
+
 Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted automatic tomography analysis.
 
 ## Windows installation
 
 1. Install the NVIDIA driver and Miniforge.
-2. Run `BL62_Reconstruction_GUI_Setup_1.0.1.exe`, or extract the portable ZIP.
+2. Run `BL62_Reconstruction_GUI_Setup_1.2.0.exe`, or extract the portable ZIP.
 3. Use **Install Environments** to prepare two isolated native Windows environments:
    - `tomocupy_astra`: reconstruction (Python 3.10).
    - `SAM3p1`: SAM3 inference (Python 3.12, PyTorch 2.10.0 CUDA 12.8).
@@ -63,3 +74,15 @@ Build the Windows executable and installer with `build_windows.ps1` (PyInstaller
 See `VALIDATION.md` for actual release tests and their scope. See `THIRD_PARTY_NOTICES.md` and `licenses/SAM_LICENSE` for SAM3 attribution and terms.
 
 Version 1.0.1: progress identifies the current phase, segmentation explicitly follows completed reconstruction, long elapsed times use HH:MM:SS, score plots follow current search intervals while global cumulative filtering is preserved, and segmentation writes per-slice timings.csv plus timing_summary.json.
+
+## User manuals
+
+Latest English illustrated edition: **October 26, 2026**.
+
+- [PDF manual (32 pages)](docs/BL62_Reconstruction_GUI_User_Manual_10262026.pdf)
+- [Editable Word manual](docs/BL62_Reconstruction_GUI_User_Manual_10262026.docx)
+- [Documentation index](docs/README.md)
+
+## Cross-image Instance target (test feature)
+
+Choose Instance under Analysis Target, click Add Image, paint the reference feature with Brush/Eraser and Undo/Redo, then Confirm. A cropped outline preview shows the saved example. One fixed example is reused across the center search and optional Segment All. See [instance prompting](docs/INSTANCE_PROMPT.md) for the explicit mask-isolation adapter and its current limits; native mask encoding is not claimed.

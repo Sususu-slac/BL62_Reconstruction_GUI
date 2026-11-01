@@ -23,9 +23,16 @@ class AnalysisRunner(QObject):
     @property
     def running(self): return self.process.state()!=QProcess.ProcessState.NotRunning
 
-    def start(self, config):
+    def start(self, config, *, instance_example=None):
         if self.running: raise RuntimeError('An analysis job is already running')
+        config=dict(config)
+        if config.get('prompt_mode','text')=='instance':
+            if instance_example is None:raise ValueError('Add a reference image and paint an instance')
+            instance_example.validate()
         self.output=Path(config['output']); self.output.mkdir(parents=True,exist_ok=False)
+        if config.get('prompt_mode','text')=='instance':
+            from sam3_rotation_center.exemplar import save_example
+            config['instance_reference']=save_example(instance_example,self.output/'instance_reference')
         self.stopping=False; self._signature=None; self._buffer=''
         path=self.output/'analysis_job.json'; path.write_text(json.dumps(config,indent=2),encoding='utf-8')
         env=QProcessEnvironment()

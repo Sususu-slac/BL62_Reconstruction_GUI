@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
 WORKER_ROOT = APP_ROOT/'worker_code' if getattr(sys,'frozen',False) else APP_ROOT
-VERSION = '1.0.1'
+VERSION = '1.2.0'
 
 def conda_python(name: str) -> str:
     roots = [Path(sys.prefix).parent.parent]
@@ -26,6 +26,9 @@ def reconstruction_python() -> str:
     return conda_python('tomocupy_astra')
 
 def settings_path() -> Path:
+    override = os.environ.get('BL62_RECON_SETTINGS')
+    if override:
+        return Path(override)
     root = Path(os.environ.get('APPDATA', Path.home() / '.config')) / 'BL62_Reconstruction'
     return root / 'settings.json'
 
@@ -36,7 +39,7 @@ def defaults() -> dict:
                 gpu=1, method='fourierrec', binning=0, chunk_size=4, iterations=20,
                 output_root='', start_row=None, end_row=None, search_row=None,
                 range_low=None, range_high=None, initial_step=None, target_step=.25,
-                search_method='fourierrec', confidence=.2, nms_iou=.5, refresh_seconds=3)
+                search_method='fourierrec', confidence=.2, nms_iou=.5, refresh_seconds=3, theme='dark')
 
 def load_settings() -> dict:
     result = defaults()
@@ -49,3 +52,13 @@ def load_settings() -> dict:
 def save_settings(value: dict) -> None:
     path = settings_path(); path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix('.tmp'); tmp.write_text(json.dumps(value, indent=2), encoding='utf-8'); tmp.replace(path)
+
+def save_theme_preference(theme: str) -> None:
+    """Save only the theme, preserving other stored and unsaved task settings."""
+    from .themes import theme_name
+    try:
+        value = json.loads(settings_path().read_text(encoding='utf-8'))
+        if not isinstance(value, dict):value = {}
+    except (OSError, ValueError):value = {}
+    value['theme'] = theme_name(theme)
+    save_settings(value)

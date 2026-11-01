@@ -2,19 +2,29 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from .main_window import MainWindow
 
 
 def main() -> int:
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs,True)
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
     app.setApplicationName("BL62 Reconstruction")
     from .runtime import VERSION
     app.setApplicationVersion(VERSION)
+    if '--theme-preview' in sys.argv:
+        from .runtime import load_settings,settings_path,save_settings
+        original=load_settings();preview=settings_path().with_name('theme_preview.json')
+        os.environ['BL62_RECON_SETTINGS']=str(preview)
+        if not preview.exists():save_settings({**original,'theme':'light'})
     window = MainWindow()
+    if '--theme-preview' in sys.argv:window.setWindowTitle('BL62 Reconstruction — Theme Preview')
     window.show()
     if '--self-test' in sys.argv:
         from .runtime import APP_ROOT,WORKER_ROOT,reconstruction_python
