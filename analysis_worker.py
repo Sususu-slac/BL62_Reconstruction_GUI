@@ -102,6 +102,7 @@ class Pipeline:
         argv=[self.cfg['recon_python'],str(ROOT/'reconstruct_candidates.py'),
             '--input',self.cfg['input'],'--output',str(folder),'--centers-file',str(manifest),
             '--row',str(self.row),'--gpu',str(self.cfg['gpu']),'--method',self.cfg['search_method']]
+        if self.cfg.get('geometry')=='laminography':argv += ['--laminography','--lamino-angle',str(self.cfg['lamino_angle'])]
         self.emit(stage='Reconstructing Candidates',indeterminate=False,completed=0,total=len(centers))
         self.child(argv,folder/'reconstruction.log',lambda:self.emit(completed=min(len(centers)-1,len(list(folder.rglob('*.tiff'))))))
         result={parse_center(p):p for p in folder.rglob('*.tiff')}
@@ -240,6 +241,7 @@ class Pipeline:
             '--reconstruction-type','full','--start-row',str(start),'--end-row',str(end),'--center',str(center),
             '--gpu',str(self.cfg['gpu']),'--chunk-size',str(self.cfg['chunk_size']),'--iterations',str(self.cfg['iterations']),
             '--binning',str(self.cfg['binning'])]
+        if self.cfg.get('geometry')=='laminography':argv += ['--lamino-angle',str(self.cfg['lamino_angle'])]
         if self.cfg['method']=='lprec':argv.append('--accept-uniform-angle-approximation')
         self.emit(stage='Reconstructing',completed=0,total=total,indeterminate=False)
         self.child(argv,self.reconstruction/'reconstruction.log',lambda:self.emit(completed=min(total-1,len(list(self.reconstruction.rglob('recon_*.tiff'))))))

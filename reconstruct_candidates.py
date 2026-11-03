@@ -19,6 +19,8 @@ def main():
     p.add_argument('--row', type=int, required=True)
     p.add_argument('--gpu', type=int, default=1)
     p.add_argument('--method', choices=['fourierrec', 'linerec'], default='fourierrec')
+    p.add_argument('--laminography', action='store_true')
+    p.add_argument('--lamino-angle', type=float, default=0.0)
     a = p.parse_args()
     os.environ['CUDA_VISIBLE_DEVICES'] = str(a.gpu)
     os.environ['PYTHONNOUSERSITE'] = '1'
@@ -45,13 +47,15 @@ def main():
         params.nschunk = int(np.ceil(len(centers)/params.ncz))
         params.lschunk = np.minimum(params.ncz, np.int32(len(centers)-np.arange(params.nschunk)*params.ncz))
     Reader.init_sizes_try = exact_centers
-    sys.argv = ['tomocupy', 'recon', '--file-name', a.input, '--out-path-name', a.output,
+    is_lamino = a.laminography
+    sys.argv = ['tomocupy', 'recon_steps' if is_lamino else 'recon', '--file-name', a.input, '--out-path-name', a.output,
                 '--reconstruction-type', 'try', '--reconstruction-algorithm', a.method,
                 '--rotation-axis', str(width/2), '--start-row', '0', '--end-row', str(height),
                 '--nsino', str(a.row/(height-1)), '--dtype', 'float32', '--binning', '0',
                 '--nsino-per-chunk', '4', '--nproj-per-chunk', '8', '--fbp-filter', 'parzen',
                 '--remove-stripe-method', 'none', '--center-search-width', '1',
                 '--center-search-step', '.25', '--save-format', 'tiff', '--clear-folder', 'False']
+    if is_lamino:sys.argv += ['--lamino-angle',str(a.lamino_angle)]
     tomo_main()
     files = sorted(Path(a.output).rglob('*.tiff'))
     if len(files) != len(centers):

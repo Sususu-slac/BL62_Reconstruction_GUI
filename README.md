@@ -11,7 +11,7 @@ annotation edits, histogram settings, training state and chat drafts are preserv
 See [theme validation](THEME_VALIDATION_20261101.md) for the checks and their scope.
 
 
-Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted automatic tomography analysis.
+Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted automatic tomography and fixed-angle laminography analysis.
 
 ## Windows installation
 
@@ -86,3 +86,7 @@ Latest English illustrated edition: **October 26, 2026**.
 ## Cross-image Instance target (test feature)
 
 Choose Instance under Analysis Target, click Add Image, paint the reference feature with Brush/Eraser and Undo/Redo, then Confirm. A cropped outline preview shows the saved example. One fixed example is reused across the center search and optional Segment All. See [instance prompting](docs/INSTANCE_PROMPT.md) for the explicit mask-isolation adapter and its current limits; native mask encoding is not claimed.
+
+## Fixed-angle laminography — 1.2.1
+
+**Laminography** on Intelligent Data Analysis is unchecked by default. Checking it opens a tilt-angle dialog; cancelling clears the checkbox. The angle is used for center-search candidates and final reconstruction. The search uses laminography LineRec; final reconstruction uses laminography FourierRec or LineRec. Angle estimation is still manual. See [the analysis guide](docs/LAMINOGRAPHY_ANALYSIS.md).

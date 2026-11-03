@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt,QTimer,QUrl
 from PySide6.QtGui import QDesktopServices,QImage,QPixmap
 from PySide6.QtWidgets import (QCheckBox,QComboBox,QDialog,QFileDialog,QGroupBox,QHBoxLayout,QLabel,QLineEdit,
-    QMessageBox,QProgressBar,QPushButton,QScrollArea,QSplitter,QVBoxLayout,QWidget)
+    QInputDialog,QMessageBox,QProgressBar,QPushButton,QScrollArea,QSplitter,QVBoxLayout,QWidget)
 from .analysis_settings import AnalysisSettings
 from .hdf5_inspector import inspect_hdf5
 from .image_view import ImageView
@@ -42,6 +42,11 @@ class AnalysisUiMixin:
         self.analysis_instance_preview.hide();instance_layout.addWidget(self.analysis_instance_preview)
         form.addWidget(self.analysis_instance_panel);self.analysis_instance_panel.hide()
         self.analysis_prompt_mode.currentIndexChanged.connect(self._analysis_prompt_changed)
+        self.analysis_lamino_angle=float(self.lamino_spin.value())
+        self.analysis_laminography=QCheckBox('Laminography')
+        self.analysis_laminography.setChecked(False)
+        self.analysis_laminography.toggled.connect(self._analysis_laminography_toggled)
+        form.addWidget(self.analysis_laminography)
         row=QHBoxLayout();self.segment_all=QCheckBox('Segment All');self.segment_all.setChecked(True);row.addWidget(self.segment_all);row.addStretch()
         self.analysis_settings_btn=QPushButton('⚙ Settings');self.analysis_settings_btn.clicked.connect(self._analysis_settings)
         row.addWidget(self.analysis_settings_btn);form.addLayout(row);layout.addWidget(task)
@@ -84,6 +89,16 @@ class AnalysisUiMixin:
     def _analysis_prompt_changed(self,*_args):
         instance=self.analysis_prompt_mode.currentData()=='instance'
         self.analysis_prompt.setVisible(not instance);self.analysis_instance_panel.setVisible(instance)
+
+    def _analysis_laminography_toggled(self,checked):
+        if not checked:return
+        angle,accepted=QInputDialog.getDouble(self,'Laminography Angle','Enter the laminography tilt angle:',
+            self.analysis_lamino_angle,-89.9,89.9,3)
+        if not accepted:
+            self.analysis_laminography.blockSignals(True);self.analysis_laminography.setChecked(False);self.analysis_laminography.blockSignals(False)
+            return
+        self.analysis_lamino_angle=angle
+        self.analysis_laminography.setToolTip(f'Laminography · {angle:g}°')
 
     def _choose_instance_image(self):
         path,_=QFileDialog.getOpenFileName(self,'Select Reference Image',self.analysis_example.source if self.analysis_example else 'D:/',
@@ -144,7 +159,11 @@ class AnalysisUiMixin:
             output=parent/f'{source.stem}_analysis_{datetime.now():%Y%m%d_%H%M%S_%f}'
             config={**self.settings,'input':str(source.resolve()),'output':str(output.resolve()),
                     'prompt_mode':mode,'prompt':self.analysis_prompt.text().strip() if mode=='text' else 'visual',
-                    'segment_all':self.segment_all.isChecked()}
+                    'segment_all':self.segment_all.isChecked(),
+                    'geometry':'laminography' if self.analysis_laminography.isChecked() else 'tomography',
+                    'lamino_angle':self.analysis_lamino_angle,
+                    'method':('lamino_'+self.settings['method'] if self.settings['method'] in ('fourierrec','linerec') else 'lamino_linerec') if self.analysis_laminography.isChecked() else self.settings['method'],
+                    'search_method':'linerec' if self.analysis_laminography.isChecked() else self.settings['search_method']}
             self.log_box.clear();self.analysis_status={};self._analysis_image_key=None;self._curve_signature=None
             self._analysis_graph=None;self.analysis_auto_zoom.setChecked(True);self.analysis_range_label.setText('Search range: —')
             self.raw_curve.setData([],[]);self.filtered_curve.setData([],[]);self.best_marker.hide()
@@ -153,6 +172,7 @@ class AnalysisUiMixin:
             self.analysis_stage.setText('Preparing analysis');self.analysis_progress.setRange(0,0);self.analysis_elapsed.setText('Total elapsed 00:00')
             self.analysis_round_progress.clear();self.analysis_detail.clear();self.analysis_detail.hide()
             self.append_log(f'Automatic analysis output: {output}')
+            self.append_log(f'Reconstruction geometry: {config["geometry"]}; tilt angle: {config["lamino_angle"] if config["geometry"]=="laminography" else 0:g}°; search method: {config["search_method"]}; final method: {config["method"]}')
             if mode=='instance':self.analysis_runner.start(config,instance_example=self.analysis_example)
             else:self.analysis_runner.start(config)
             self._update_busy()
