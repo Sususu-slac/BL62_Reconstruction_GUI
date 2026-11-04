@@ -11,6 +11,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+from ct_recon_gui.preprocessing import add_arguments as preprocessing_arguments, argv as preprocessing_argv
 
 
 TOMOCUPY_METHODS = {"fourierrec", "lprec", "linerec"}
@@ -28,12 +29,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--center", type=float, required=True); p.add_argument("--gpu", type=int, default=0)
     p.add_argument("--chunk-size", "--nsino-per-chunk", dest="chunk_size", type=int, default=4)
     p.add_argument("--nproj-per-chunk", type=int, default=8); p.add_argument("--dtype", default="float32")
-    p.add_argument("--iterations", type=int, default=20); p.add_argument("--filter", default="parzen")
+    p.add_argument("--iterations", type=int, default=20);
     p.add_argument("--binning", type=int, choices=(0, 1, 2, 3), default=0)
     p.add_argument("--lamino-angle", type=float, default=20); p.add_argument("--center-search-width", type=float, default=50)
-    p.add_argument("--center-search-step", type=float, default=.5); p.add_argument("--remove-stripe-method", default="none")
+    p.add_argument("--center-search-step", type=float, default=.5)
     p.add_argument("--lamino-search-width", type=float, default=5); p.add_argument("--lamino-search-step", type=float, default=.25)
     p.add_argument("--accept-uniform-angle-approximation", action="store_true")
+    preprocessing_arguments(p)
     return p.parse_args()
 
 
@@ -101,7 +103,6 @@ def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
         "--rotation-axis", str(args.center), "--start-row", str(command_start_row), "--end-row", str(command_end_row),
         "--dtype", args.dtype, "--nsino-per-chunk", str(args.chunk_size), "--nproj-per-chunk", str(args.nproj_per_chunk),
         "--binning", str(args.binning),
-        "--fbp-filter", args.filter, "--remove-stripe-method", args.remove_stripe_method,
         "--save-format", "tiff", "--clear-folder", "False", "--verbose"]
     if args.reconstruction_type == "try" and (not is_lamino or args.search_kind == "center"):
         factor = 2 ** args.binning
@@ -116,6 +117,7 @@ def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
             command += ["--lamino-start-row", str(args.start_row), "--lamino-end-row", str(args.end_row)]
         if args.reconstruction_type == "try" and args.search_kind == "angle":
             command += ["--nsino", str(args.try_row / max(1, nrow - 1))]
+    command += preprocessing_argv(vars(args),external=True)
     child_env = {
         **os.environ,
         "CUDA_VISIBLE_DEVICES": str(args.gpu),
@@ -141,6 +143,51 @@ def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
                      "effective_width": width // factor}
 
 
+def remove_astra_stripes(norm,args):
+    """Apply the same transmission-domain Vo correction used by TomocuPy."""
+    mode=getattr(args,'remove_stripe_method','vo-all')
+    if mode=='none':return norm
+    if mode not in ('vo-all','fw','ti'):raise ValueError('Unknown stripe method')
+    import cupy as cp
+    from tomocupy.processing.remove_stripe import remove_all_stripe
+    with cp.cuda.Device(args.gpu):
+        for start in range(0,norm.shape[1],args.chunk_size):
+            stop=min(start+args.chunk_size,norm.shape[1])
+            data=cp.asarray(norm[:,start:stop],dtype=cp.float32)
+            if mode=='vo-all':corrected=remove_all_stripe(data,snr=3,la_size=61,sm_size=21,dim=1)
+            elif mode=='fw':
+                from tomocupy.processing.remove_stripe import remove_stripe_fw
+                corrected=remove_stripe_fw(data,1,'sym16',7)
+            else:
+                from tomocupy.processing.remove_stripe import remove_stripe_ti
+                corrected=remove_stripe_ti(data,.022,1)
+            norm[:,start:stop]=cp.asnumpy(corrected)
+    return norm
+
+
+def preprocess_astra(raw,flat,dark,args):
+    import cupy as cp
+    from types import SimpleNamespace
+    from tomocupy.processing import proc_functions as proc
+    if getattr(args,'flat_linear',False) and flat.shape[0]<3:raise ValueError('Flat-linear needs at least three flat frames')
+    old_args,old_params=proc.args,proc.params
+    proc.args=SimpleNamespace(dtype='float32',dezinger=getattr(args,'dezinger',0),dezinger_threshold=getattr(args,'dezinger_threshold',5000),bright_ratio=getattr(args,'bright_ratio',1.),flat_linear=str(getattr(args,'flat_linear',False)))
+    proc.params=SimpleNamespace(nproj=raw.shape[0]);functions=proc.ProcFunctions.__new__(proc.ProcFunctions)
+    result=np.empty_like(raw,dtype=np.float32)
+    try:
+        with cp.cuda.Device(args.gpu):
+            for start in range(0,raw.shape[1],args.chunk_size):
+                stop=min(start+args.chunk_size,raw.shape[1])
+                data=functions.remove_outliers(cp.asarray(raw[:,start:stop],dtype=cp.float32))
+                white=functions.remove_outliers(cp.asarray(flat[:,start:stop],dtype=cp.float32))
+                black=functions.remove_outliers(cp.asarray(dark[:,start:stop],dtype=cp.float32))
+                transmission=cp.asnumpy(functions.darkflat_correction(data,black,white))
+                transmission=remove_astra_stripes(transmission,args)
+                result[:,start:stop]=cp.asnumpy(functions.minus_log(cp.asarray(transmission))) if getattr(args,'minus_log',True) else transmission
+    finally:proc.args,proc.params=old_args,old_params
+    return result
+
+
 def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
     import astra
     import tifffile
@@ -148,8 +195,6 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
     with h5py.File(args.input, "r") as f:
         theta0 = f["exchange/theta"][:].astype(np.float32)
         theta = np.deg2rad(theta0) if np.max(np.abs(theta0)) > 2*np.pi else theta0
-        dark = np.mean(f["exchange/data_dark"][:], axis=0, dtype=np.float32)
-        flat = np.mean(f["exchange/data_white"][:], axis=0, dtype=np.float32)
         factor = 2 ** args.binning
         effective_width = width // factor
         cropped_width = effective_width * factor
@@ -164,12 +209,12 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
         raw_end = args.start_row + usable_rows
         raw = f["exchange/data"][:, args.start_row:raw_end, :cropped_width].astype(np.float32)
         raw = raw.reshape(len(theta), usable_rows // factor, factor, effective_width, factor).mean(axis=(2, 4))
-        flat_roi = flat[args.start_row:raw_end, :cropped_width]
-        dark_roi = dark[args.start_row:raw_end, :cropped_width]
-        flat_b = flat_roi.reshape(usable_rows // factor, factor, effective_width, factor).mean(axis=(1, 3))
-        dark_b = dark_roi.reshape(usable_rows // factor, factor, effective_width, factor).mean(axis=(1, 3))
-        norm = np.maximum((raw-dark_b[None])/np.maximum(flat_b-dark_b,1)[None], 1e-6)
-        batch = -np.log(norm).astype(np.float32)
+        def fields(name):
+            dataset=f[name]
+            a=dataset[:,args.start_row:raw_end,:cropped_width] if dataset.ndim==3 else dataset[args.start_row:raw_end,:cropped_width][None]
+            return a.astype(np.float32).reshape(a.shape[0],usable_rows//factor,factor,effective_width,factor).mean(axis=(2,4))
+        flat_b=fields('exchange/data_white');dark_b=fields('exchange/data_dark')
+        batch=preprocess_astra(raw,flat_b,dark_b,args)
         effective_start = args.start_row // factor
         for start in range(0, batch.shape[1], args.chunk_size):
             end = min(start + args.chunk_size, batch.shape[1])
@@ -179,7 +224,9 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
                 name = {"fbp_cuda":"FBP_CUDA", "sirt_cuda":"SIRT_CUDA", "cgls_cuda":"CGLS_CUDA"}[args.method]
                 cfg = astra.astra_dict(name); cfg.update(ProjectionDataId=sid, ReconstructionDataId=rid)
                 cfg["option"] = {"GPUindex": args.gpu}
-                if args.method == "fbp_cuda": cfg["option"]["FilterType"] = args.filter
+                if args.method == "fbp_cuda":
+                    if args.filter=="cosine2":raise ValueError("Cosine2 filter is only supported by TomocuPy")
+                    cfg["option"]["FilterType"] = {"ramp":"ram-lak","shepp":"shepp-logan"}.get(args.filter,args.filter)
                 aid = astra.algorithm.create(cfg)
                 try:
                     astra.algorithm.run(aid, 1 if args.method == "fbp_cuda" else args.iterations)
@@ -202,7 +249,7 @@ def main() -> int:
     args = parse_args(); _, _, width = validate(args); args.output.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     command, method_metadata = run_astra(args, width) if args.method in ASTRA_METHODS else run_tomocupy(args)
-    metadata = {"environment": "tomocupy_astra", "method": args.method, "input": str(args.input),
+    metadata = {"environment": "tomocupy_astra", "preprocessing":__import__("ct_recon_gui.preprocessing",fromlist=["values"]).values(vars(args)), "remove_stripe_method":args.remove_stripe_method, "method": args.method, "input": str(args.input),
                 "output": str(args.output), "command": command, "elapsed_seconds": time.perf_counter()-started,
                 "binning_exponent": args.binning, "binning_factor": 2 ** args.binning,
                 "original_center": args.center, "original_rows": [args.start_row, args.end_row],

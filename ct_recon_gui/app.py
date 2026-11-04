@@ -30,7 +30,9 @@ def main() -> int:
         from .runtime import APP_ROOT,WORKER_ROOT,reconstruction_python
         target=Path(sys.argv[sys.argv.index('--self-test')+1]);app.processEvents()
         report={'version':VERSION,'tabs':window.main_tabs.count(),'manual_methods':window.method_combo.count(),
-            'log_collapsed':not window.log_toggle.isChecked(),'segment_all':window.segment_all.isChecked(),
+            'log_collapsed':not window.log_toggle.isChecked(),
+            'optimization_tab':window.center_tabs.tabText(2),'apply_parameter':window.apply_center_btn.text(),
+            'advanced_settings_width':window.preprocessing_btn.width(),'segment_all':window.segment_all.isChecked(),
             'reconstruction_python':reconstruction_python(),
             'backend_present':(WORKER_ROOT/'backend_runner.py').is_file(),
             'analysis_worker_present':(WORKER_ROOT/'analysis_worker.py').is_file(),

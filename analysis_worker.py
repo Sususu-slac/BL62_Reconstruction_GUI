@@ -102,6 +102,8 @@ class Pipeline:
         argv=[self.cfg['recon_python'],str(ROOT/'reconstruct_candidates.py'),
             '--input',self.cfg['input'],'--output',str(folder),'--centers-file',str(manifest),
             '--row',str(self.row),'--gpu',str(self.cfg['gpu']),'--method',self.cfg['search_method']]
+        from ct_recon_gui.preprocessing import argv as preprocessing_argv
+        argv += preprocessing_argv(self.cfg)
         if self.cfg.get('geometry')=='laminography':argv += ['--laminography','--lamino-angle',str(self.cfg['lamino_angle'])]
         self.emit(stage='Reconstructing Candidates',indeterminate=False,completed=0,total=len(centers))
         self.child(argv,folder/'reconstruction.log',lambda:self.emit(completed=min(len(centers)-1,len(list(folder.rglob('*.tiff'))))))
@@ -160,7 +162,7 @@ class Pipeline:
         from sam3_rotation_center.visualization import save_overlay
         with h5py.File(self.cfg['input'],'r') as h:
             _,self.height,self.width=h['exchange/data'].shape
-        self.row=(self.height-1)//2 if self.cfg['search_row'] is None else int(self.cfg['search_row'])
+        self.row=self.height//2 if self.cfg['search_row'] is None else int(self.cfg['search_row'])
         self.low=0. if self.cfg['range_low'] is None else float(self.cfg['range_low'])
         self.high=float(self.width-1) if self.cfg['range_high'] is None else float(self.cfg['range_high'])
         if not 0<=self.row<self.height:raise ValueError('Invalid center-search slice')
@@ -241,6 +243,8 @@ class Pipeline:
             '--reconstruction-type','full','--start-row',str(start),'--end-row',str(end),'--center',str(center),
             '--gpu',str(self.cfg['gpu']),'--chunk-size',str(self.cfg['chunk_size']),'--iterations',str(self.cfg['iterations']),
             '--binning',str(self.cfg['binning'])]
+        from ct_recon_gui.preprocessing import argv as preprocessing_argv
+        argv += preprocessing_argv(self.cfg)
         if self.cfg.get('geometry')=='laminography':argv += ['--lamino-angle',str(self.cfg['lamino_angle'])]
         if self.cfg['method']=='lprec':argv.append('--accept-uniform-angle-approximation')
         self.emit(stage='Reconstructing',completed=0,total=total,indeterminate=False)

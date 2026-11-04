@@ -212,6 +212,10 @@ class GuiSmokeTest(unittest.TestCase):
             window._job_finished(True, "Completed")
             self.assertIs(window.center_tabs.currentWidget(), window.center_search_tab)
             self.assertIn("center 1028.500", window.center_candidate_label.text())
+            from PySide6.QtTest import QTest
+            for _ in range(100):
+                if window.center_search_view._pixmap is not None:break
+                QTest.qWait(10)
             self.assertIsNotNone(window.center_search_view._pixmap)
             window.close()
 

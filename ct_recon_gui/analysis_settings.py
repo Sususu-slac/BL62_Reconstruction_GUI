@@ -5,7 +5,7 @@ from .gpu_monitor import GpuSelector
 
 class AnalysisSettings(QDialog):
     def __init__(self,settings,gpus,parent=None):
-        super().__init__(parent);self.values=dict(settings);self.setWindowTitle('Analysis Settings');self.resize(700,610)
+        super().__init__(parent);self.values=dict(settings);dimensions=getattr(parent,'_analysis_dimensions',(0,2048,2048));rows,width=dimensions[1],dimensions[2];self.setWindowTitle('Analysis Settings');self.resize(700,610)
         layout=QVBoxLayout(self);tabs=QTabWidget();layout.addWidget(tabs)
         def page(name):
             panel=QWidget();form=QFormLayout(panel);form.setVerticalSpacing(12)
@@ -35,7 +35,8 @@ class AnalysisSettings(QDialog):
         self.gpu=GpuSelector();self.gpu.update_gpus(gpus);self.gpu.setValue(settings['gpu']);form.addRow('GPU',self.gpu)
         self.binning=combo([('1 × 1 · Original',0),('2 × 2',1),('4 × 4',2),('8 × 8',3)],settings['binning']);form.addRow('Binning',self.binning)
         self.all_rows=QCheckBox('All Slices');self.all_rows.setChecked(settings['start_row'] is None);form.addRow('Reconstruction Range',self.all_rows)
-        self.start=integer(settings['start_row']);self.end=integer(settings['end_row'] or 2048)
+        self.start=integer(settings['start_row']);self.start.setMaximum(max(0,rows-1));self.end=integer(settings['end_row'] if settings['end_row'] is not None else rows)
+        self.end.setMaximum(rows)
         form.addRow('Start Row',self.start);form.addRow('End Row (exclusive)',self.end)
         for w in (self.start,self.end):w.setEnabled(not self.all_rows.isChecked());self.all_rows.toggled.connect(lambda checked,w=w:w.setEnabled(not checked))
         self.chunk=integer(settings['chunk_size'],256);self.chunk.setMinimum(4);form.addRow('Chunk Size',self.chunk)
@@ -44,9 +45,9 @@ class AnalysisSettings(QDialog):
         self.iterations.setEnabled(settings['method'] in ('sirt_cuda','cgls_cuda'))
         form=page('Center Search')
         self.middle=QCheckBox('Middle Slice');self.middle.setChecked(settings['search_row'] is None);form.addRow('Center-search Slice',self.middle)
-        self.row=integer(settings['search_row'] or 1023);self.row.setEnabled(not self.middle.isChecked());self.middle.toggled.connect(lambda checked:self.row.setEnabled(not checked));form.addRow('Detector Row',self.row)
+        self.row=integer(settings['search_row'] if settings['search_row'] is not None else rows//2);self.row.setMaximum(rows-1);self.row.setEnabled(not self.middle.isChecked());self.middle.toggled.connect(lambda checked:self.row.setEnabled(not checked));form.addRow('Detector Row',self.row)
         self.global_range=QCheckBox('Global');self.global_range.setChecked(settings['range_low'] is None);form.addRow('Initial Search Range',self.global_range)
-        self.low=number(settings['range_low']);self.high=number(settings['range_high'] or 2047)
+        self.low=number(settings['range_low']);self.high=number(settings['range_high'] if settings['range_high'] is not None else width-1)
         for label,w in [('Range Start',self.low),('Range End',self.high)]:
             form.addRow(label,w);w.setEnabled(not self.global_range.isChecked());self.global_range.toggled.connect(lambda checked,w=w:w.setEnabled(not checked))
         self.auto_step=QCheckBox('Auto');self.auto_step.setChecked(settings['initial_step'] is None);form.addRow('Initial Step',self.auto_step)
@@ -54,6 +55,8 @@ class AnalysisSettings(QDialog):
         self.target=combo([('0.25 px',.25),('0.5 px',.5),('1 px',1.)],settings['target_step']);form.addRow('Target Step',self.target)
         self.search_method=combo([('FourierRec','fourierrec'),('LineRec','linerec')],settings['search_method']);form.addRow('Search Reconstruction Method',self.search_method)
         score=QLineEdit('Confidence Weighted');score.setReadOnly(True);form.addRow('Scoring Method',score)
+        from .preprocessing_dialog import PreprocessingWidget
+        form=page('Advanced Settings');self.preprocessing=PreprocessingWidget(settings,self);form.addRow(self.preprocessing)
         form=page('SAM3')
         self.checkpoint,row=path_row('checkpoint');form.addRow('Checkpoint',row)
         self.confidence=number(settings['confidence'],.2,.79,.05);form.addRow('Minimum Confidence',self.confidence)
@@ -75,4 +78,5 @@ class AnalysisSettings(QDialog):
             target_step=self.target.currentData(),search_method=self.search_method.currentData(),checkpoint=self.checkpoint.text().strip(),
             confidence=self.confidence.value(),nms_iou=self.nms.value(),repo=self.repo.text().strip(),sam3_python=self.python.text().strip(),
             recon_python=self.recon_python.text().strip(),refresh_seconds=self.refresh.value())
+        result.update(self.preprocessing.settings())
         return result

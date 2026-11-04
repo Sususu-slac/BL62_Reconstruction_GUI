@@ -16,7 +16,7 @@ Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted 
 ## Windows installation
 
 1. Install the NVIDIA driver and Miniforge.
-2. Run `BL62_Reconstruction_GUI_Setup_1.2.0.exe`, or extract the portable ZIP.
+2. Run `BL62_Reconstruction_GUI_Setup_1.2.6.exe`, or extract the portable ZIP.
 3. Use **Install Environments** to prepare two isolated native Windows environments:
    - `tomocupy_astra`: reconstruction (Python 3.10).
    - `SAM3p1`: SAM3 inference (Python 3.12, PyTorch 2.10.0 CUDA 12.8).
@@ -90,3 +90,7 @@ Choose Instance under Analysis Target, click Add Image, paint the reference feat
 ## Fixed-angle laminography — 1.2.1
 
 **Laminography** on Intelligent Data Analysis is unchecked by default. Checking it opens a tilt-angle dialog; cancelling clears the checkbox. The angle is used for center-search candidates and final reconstruction. The search uses laminography LineRec; final reconstruction uses laminography FourierRec or LineRec. Angle estimation is still manual. See [the analysis guide](docs/LAMINOGRAPHY_ANALYSIS.md).
+
+## November 4 update — 1.2.6
+
+Right-aligned Advanced Settings with a compact gear, a shared Parameter Optimization viewer, image-derived trial defaults, Vo-all preprocessing controls and responsive background result collection/preview. The user has confirmed working tomography and laminography reconstruction with correct flat-field calibration. See [the release notes](docs/RELEASE_1.2.6.md) for changes and validation scope.

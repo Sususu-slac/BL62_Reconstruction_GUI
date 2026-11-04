@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from .analysis_ui import AnalysisUiMixin
 from .analysis_runner import AnalysisRunner
 from .gpu_monitor import GpuMonitor, GpuSelector
-from .runtime import APP_ROOT, load_settings, save_theme_preference
+from .runtime import APP_ROOT, load_settings, save_theme_preference, save_settings
 from .themes import colors_for, palette_for, stylesheet_for, theme_name
 from .commands import build_wsl_argv, display_command
 from .exporter import ExportJob, ExportWorker
@@ -72,7 +72,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.runner = JobRunner(self)
         self.runner.log.connect(self.append_log)
         self.runner.state_changed.connect(self._set_state)
-        self.runner.result_found.connect(self._new_result)
+        self.runner.results_found.connect(self._new_results)
         self.runner.finished.connect(self._job_finished)
         self.settings = load_settings()
         self.theme_name = theme_name(self.settings.get('theme'))
@@ -83,7 +83,12 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.result_preview_timer=QTimer(self);self.result_preview_timer.setSingleShot(True);self.result_preview_timer.setInterval(80)
         self.result_preview_timer.timeout.connect(self._display_selected_result)
         self._batching_results=False
+        self._manual_input_key=None;self._analysis_input_key=None
         self._build_ui()
+        self.input_metadata_timer=QTimer(self);self.input_metadata_timer.setSingleShot(True);self.input_metadata_timer.setInterval(350);self.input_metadata_timer.timeout.connect(self._refresh_manual_defaults)
+        self.input_edit.textChanged.connect(self._refresh_manual_defaults)
+        self.analysis_metadata_timer=QTimer(self);self.analysis_metadata_timer.setSingleShot(True);self.analysis_metadata_timer.setInterval(350);self.analysis_metadata_timer.timeout.connect(self._refresh_analysis_defaults)
+        self.analysis_input.textChanged.connect(lambda:self._refresh_analysis_defaults())
         self._apply_style()
         self._mode_changed()
         self._environment_label()
@@ -191,6 +196,10 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
                               ("Binning", self.binning_combo), ("GPU", self.gpu_spin), ("Chunk size", self.chunk_spin),
                               ("Iterations", self.iter_spin)):
             form.addRow(label, widget)
+        self.preprocessing_btn=QPushButton('⚙');self.preprocessing_btn.setObjectName('compactSettings')
+        self.preprocessing_btn.setFixedSize(28,28);self.preprocessing_btn.setToolTip('Advanced Settings');self.preprocessing_btn.setAccessibleName('Advanced Settings')
+        self.preprocessing_btn.clicked.connect(self._open_preprocessing)
+        advanced_row=QHBoxLayout();advanced_row.addStretch();advanced_row.addWidget(QLabel('Advanced Settings'));advanced_row.addWidget(self.preprocessing_btn);form.addRow(advanced_row)
         self.effective_geometry_label = QLabel("Effective geometry: select an HDF5 file")
         self.effective_geometry_label.setWordWrap(True)
         form.addRow(self.effective_geometry_label)
@@ -206,6 +215,13 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(panel)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         return scroll
+
+    def _open_preprocessing(self):
+        if self.runner.running or self.analysis_runner.running:return
+        from .preprocessing_dialog import PreprocessingDialog
+        dialog=PreprocessingDialog(self.settings,self)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            self.settings.update(dialog.editor.settings());save_settings(self.settings)
 
     def _open_center_settings(self) -> None:
         dialog = QDialog(self); dialog.setWindowTitle("Rotation Center Search Settings")
@@ -356,14 +372,14 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         candidate_nav = QHBoxLayout()
         self.center_candidate_slider = QSlider(Qt.Orientation.Horizontal); self.center_candidate_slider.setRange(0, 0)
         self.center_candidate_slider.valueChanged.connect(self._center_candidate_changed)
-        self.center_candidate_label = QLabel("No center candidates")
+        self.center_candidate_label = QLabel("No parameter candidates")
         candidate_nav.addWidget(self.center_candidate_slider, 1); candidate_nav.addWidget(self.center_candidate_label)
         search_layout.addLayout(candidate_nav)
-        self.apply_center_btn = QPushButton("Apply Selected Center")
+        self.apply_center_btn = QPushButton("Apply Selected Parameter")
         self.apply_center_btn.setObjectName("primaryButton"); self.apply_center_btn.setEnabled(False)
         self.apply_center_btn.clicked.connect(self._apply_selected_center)
         search_layout.addWidget(self.apply_center_btn)
-        tabs.addTab(center_search, "Rotation Center Search")
+        tabs.addTab(center_search, "Parameter Optimization")
         self.center_search_tab = center_search
         self.center_tabs = tabs
         return tabs
@@ -398,9 +414,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.output_edit.setText(str(Path(path).parent / f"{Path(path).stem}_reconstruction"))
         try:
             self.info = inspect_hdf5(path)
-            start, end = self.info.suggested_rows
-            self.start_spin.setValue(start); self.end_spin.setValue(end); self.center_spin.setValue(self.info.suggested_center)
-            self.try_row_spin.setRange(0, self.info.data_shape[1] - 1); self.try_row_spin.setValue((self.info.data_shape[1] - 1) // 2)
+            self._apply_manual_defaults(self.info)
             self._update_search_tooltips()
             warning = "\n" + "\n".join("WARNING: " + w for w in self.info.warnings) if self.info.warnings else ""
             self.file_info.setText(
@@ -419,6 +433,28 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             self.append_log(f"Validated HDF5: {path}")
         except Exception as exc:
             QMessageBox.critical(self, "HDF5 validation failed", str(exc))
+
+    def _input_key(self,path):
+        source=Path(path);stat=source.stat();return str(source.resolve()).casefold(),stat.st_size,stat.st_mtime_ns
+
+    def _apply_manual_defaults(self,info):
+        rows=info.data_shape[1];self.info=info
+        self.start_spin.setRange(0,rows-1);self.end_spin.setRange(1,rows)
+        self.start_spin.setValue(0);self.end_spin.setValue(rows)
+        self.try_row_spin.setRange(0,rows-1);self.try_row_spin.setValue(rows//2)
+        self.center_spin.setRange(0,info.data_shape[2]);self.center_spin.setValue(info.suggested_center)
+        self._manual_input_key=self._input_key(info.path);self._update_search_tooltips();self._effective_geometry_changed()
+
+    def _refresh_manual_defaults(self):
+        if self.runner.running:return
+        path=self.input_edit.text().strip()
+        if not path or not Path(path).is_file():return
+        try:
+            if self._input_key(path)==self._manual_input_key:return
+            info=inspect_hdf5(path);self._apply_manual_defaults(info)
+            self.file_info.setText(f'data {info.data_shape} {info.data_dtype}\ntheta {info.theta_min:.3g}..{info.theta_max:.3g} {info.theta_unit}')
+            self._preview_cache.clear();self._configure_input_navigation(info.data_shape[0]//2);self._schedule_input_frame()
+        except (OSError,ValueError,KeyError) as error:self.file_info.setText('Cannot read HDF5: '+str(error))
 
     def _choose_output(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select output directory", "D:\\")
@@ -669,6 +705,8 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             search_kind="angle" if selected_type == "angle_try" else "center",
             start_row=self.start_spin.value(), end_row=self.end_spin.value(), try_row=self.try_row_spin.value(), center=self.center_spin.value(),
             gpu=self.gpu_spin.value(), chunk_size=self.chunk_spin.value(), iterations=self.iter_spin.value(),
+            stripe_method=self.settings.get('remove_stripe_method','vo-all'),filter_name=self.settings.get('filter_name','parzen'),
+            dezinger=self.settings.get('dezinger',0),dezinger_threshold=self.settings.get('dezinger_threshold',5000),bright_ratio=self.settings.get('bright_ratio',1.),minus_log=self.settings.get('minus_log',True),flat_linear=self.settings.get('flat_linear',False),
             lamino_angle=self.lamino_spin.value(), binning=self.binning_combo.currentData(),
             center_search_width=self.search_width_spin.value(), center_search_step=self.search_step_spin.value(),
             lamino_search_width=self.lamino_search_width_spin.value(), lamino_search_step=self.lamino_search_step_spin.value(),
@@ -687,6 +725,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             selected_type = self.type_combo.currentData()
             self.log_box.clear()
             run_type = "full" if selected_type == "full" else "try"
+            self._refresh_manual_defaults()
             job = self._job(run_type); job.validate()
             self.active_selected_type = selected_type
             # Re-read the exact path for every run. A manually changed input
@@ -745,47 +784,54 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
 
     def _set_state(self, state: str) -> None:
         self.state_label.setText(state)
-        running = state in ("Running", "Stopping")
+        running = state in ("Running", "Stopping", "Finalizing results")
         self.progress.setVisible(running); self.stop_btn.setEnabled(state == "Running")
         self._update_busy()
 
     def _new_result(self, path: str) -> None:
-        result = Path(path)
-        match = re.search(r"_center(-?\d+(?:\.\d+)?)", result.stem)
-        angle_match = re.search(r"_angle(-?\d+(?:\.\d+)?)", result.stem)
-        if not match and angle_match:
-            match = angle_match; self.search_candidate_kind = "angle"
-        if match:
-            center = float(match.group(1))
-            existing = next((i for i, (_, path) in enumerate(self.center_candidates) if path == result), None)
-            if existing is None:
-                self.center_candidates.append((center, result))
-                self.center_candidates.sort(key=lambda item: item[0])
-            index = next(i for i, item in enumerate(self.center_candidates) if item[1] == result)
-            self.center_candidates[index] = (center, result)
-            self.center_candidate_slider.setRange(0, len(self.center_candidates) - 1)
-            self.center_candidate_slider.setValue(index); self._show_center_candidate(index)
-            self.apply_center_btn.setEnabled(True); self.center_tabs.setCurrentWidget(self.center_search_tab)
-            return
-        if result not in self.results:
-            self.results.append(result)
-            self.results.sort(key=lambda item: item.name.lower())
-        index = self.results.index(result)
-        self.result_combo.blockSignals(True)
-        self.result_combo.clear()
-        for item in self.results:
-            self.result_combo.addItem(item.name, item)
-        self.result_combo.setCurrentIndex(index)
-        self.result_combo.blockSignals(False)
-        self.result_slider.setEnabled(True)
-        self.result_slider.setRange(0, len(self.results) - 1)
-        self._batching_results=True
-        self.result_slider.setValue(index)
-        self._selected_result(index)
-        self._batching_results=False
-        self.latest_label.setText(str(result))
-        if self.export_source_combo.currentData() == "reconstruction":
-            self._export_source_changed()
+        self._new_results([path])
+
+    def _new_results(self, paths) -> None:
+        # Merge each scan once. Reading a TIFF for every arrival blocks the event loop.
+        candidates = dict((path, value) for value, path in self.center_candidates)
+        results = set(self.results)
+        last_candidate = last_result = None
+        for name in paths:
+            result = Path(name)
+            match = re.search(r"_center(-?\d+(?:\.\d+)?)", result.stem)
+            angle = re.search(r"_angle(-?\d+(?:\.\d+)?)", result.stem)
+            if match or angle:
+                candidates[result] = float((match or angle).group(1))
+                if angle and not match:self.search_candidate_kind = 'angle'
+                last_candidate = result
+            else:
+                results.add(result);last_result = result
+        if last_candidate is not None:
+            self.center_candidates = sorted(((value, path) for path, value in candidates.items()), key=lambda item: item[0])
+            index = next(i for i, item in enumerate(self.center_candidates) if item[1] == last_candidate)
+            self.center_candidate_slider.blockSignals(True)
+            self.center_candidate_slider.setRange(0, len(self.center_candidates)-1)
+            self.center_candidate_slider.setValue(index)
+            self.center_candidate_slider.blockSignals(False)
+            self._show_center_candidate(index)
+            self.apply_center_btn.setEnabled(True)
+            self.center_tabs.setCurrentWidget(self.center_search_tab)
+        if last_result is not None:
+            self.results = sorted(results, key=lambda item: item.name.lower())
+            index = self.results.index(last_result)
+            self.result_combo.blockSignals(True)
+            self.result_combo.clear()
+            for item in self.results:self.result_combo.addItem(item.name, item)
+            self.result_combo.setCurrentIndex(index)
+            self.result_combo.blockSignals(False)
+            self.result_slider.setEnabled(True)
+            self.result_slider.setRange(0, len(self.results)-1)
+            self._batching_results = True
+            self._selected_result(index)
+            self._batching_results = False
+            self.latest_label.setText(str(last_result))
+            if self.export_source_combo.currentData() == 'reconstruction':self._export_source_changed()
+
     def _selected_result(self, index: int) -> None:
         if index >= 0:
             path = self.result_combo.itemData(index)

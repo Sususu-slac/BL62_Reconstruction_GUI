@@ -20,6 +20,8 @@ def main():
     p.add_argument('--gpu', type=int, default=1)
     p.add_argument('--method', choices=['fourierrec', 'linerec'], default='fourierrec')
     p.add_argument('--laminography', action='store_true')
+    from ct_recon_gui.preprocessing import add_arguments,argv as preprocessing_argv
+    add_arguments(p)
     p.add_argument('--lamino-angle', type=float, default=0.0)
     a = p.parse_args()
     os.environ['CUDA_VISIBLE_DEVICES'] = str(a.gpu)
@@ -52,10 +54,10 @@ def main():
                 '--reconstruction-type', 'try', '--reconstruction-algorithm', a.method,
                 '--rotation-axis', str(width/2), '--start-row', '0', '--end-row', str(height),
                 '--nsino', str(a.row/(height-1)), '--dtype', 'float32', '--binning', '0',
-                '--nsino-per-chunk', '4', '--nproj-per-chunk', '8', '--fbp-filter', 'parzen',
-                '--remove-stripe-method', 'none', '--center-search-width', '1',
+                '--nsino-per-chunk', '4', '--nproj-per-chunk', '8', '--center-search-width', '1',
                 '--center-search-step', '.25', '--save-format', 'tiff', '--clear-folder', 'False']
     if is_lamino:sys.argv += ['--lamino-angle',str(a.lamino_angle)]
+    sys.argv += preprocessing_argv(vars(a),external=True)
     tomo_main()
     files = sorted(Path(a.output).rglob('*.tiff'))
     if len(files) != len(centers):

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .models import GeometryMode, ReconJob, ReconMethod
+from .preprocessing import argv as preprocessing_argv
 
 
 from .runtime import APP_ROOT, WORKER_ROOT, reconstruction_python
@@ -33,8 +34,7 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
             "--lamino-search-width", str(job.lamino_search_width),
             "--lamino-search-step", str(job.lamino_search_step),
             "--binning", str(job.binning),
-            "--remove-stripe-method", job.stripe_method,
-        ] + (["--try-row", str(job.try_row)] if job.reconstruction_type == "try" else [])
+        ] + preprocessing_argv(job.to_json_dict()) + (["--try-row", str(job.try_row)] if job.reconstruction_type == "try" else [])
     argv = [
         reconstruction_python(), str(BACKEND_RUNNER), job.method.value, source, output,
         "--reconstruction-type", job.reconstruction_type,
@@ -42,6 +42,7 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
         "--center", str(job.center), "--gpu", str(job.gpu),
         "--chunk-size", str(job.chunk_size), "--dtype", job.dtype, "--binning", str(job.binning),
     ]
+    argv += preprocessing_argv(job.to_json_dict())
     if job.reconstruction_type == "try":
         argv += ["--try-row", str(job.try_row),
                  "--center-search-width", str(job.center_search_width),

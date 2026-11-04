@@ -44,7 +44,12 @@ class ReconJob:
     iterations: int = 20
     dtype: str = "float32"
     filter_name: str = "parzen"
-    stripe_method: str = "none"
+    stripe_method: str = "vo-all"
+    dezinger: int = 0
+    dezinger_threshold: float = 5000
+    bright_ratio: float = 1.
+    minus_log: bool = True
+    flat_linear: bool = False
     lamino_angle: float = 20.0
     center_search_width: float = 50.0
     center_search_step: float = 0.5
@@ -53,6 +58,7 @@ class ReconJob:
     uniform_angle_approximation: bool = False
 
     def validate(self) -> None:
+        if self.bright_ratio<=0 or self.dezinger<0 or self.dezinger_threshold<0:raise ValueError('Invalid preprocessing settings')
         if not self.input_path:
             raise ValueError("Select an input HDF5 file")
         if not self.output_dir:

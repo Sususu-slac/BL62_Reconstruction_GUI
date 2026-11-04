@@ -123,8 +123,23 @@ class AnalysisUiMixin:
             try:inspect_hdf5(path)
             except Exception as error:QMessageBox.critical(self,'Invalid HDF5',str(error));return
             self.analysis_input.setText(path)
+            self._refresh_analysis_defaults(force=True)
+
+    def _refresh_analysis_defaults(self,force=False):
+        if self.analysis_runner.running:return
+        path=self.analysis_input.text().strip()
+        if not path or not Path(path).is_file():return
+        try:
+            key=self._input_key(path)
+            if not force and key==self._analysis_input_key:return
+            info=inspect_hdf5(path)
+            self.settings.update(start_row=None,end_row=None,search_row=None)
+            self._analysis_input_key=key
+            self._analysis_dimensions=info.data_shape
+        except (OSError,ValueError,KeyError):return
 
     def _analysis_settings(self):
+        self._refresh_analysis_defaults()
         dialog=AnalysisSettings(self.settings,self.gpus,self)
         if dialog.exec()==QDialog.DialogCode.Accepted:
             self.settings=dialog.result_settings();save_settings(self.settings)
@@ -140,6 +155,7 @@ class AnalysisUiMixin:
         if self.runner.running or self.analysis_runner.running:
             QMessageBox.warning(self,'Job running','Wait for the current job or use Safe Stop.');return
         try:
+            self._refresh_analysis_defaults()
             source=Path(self.analysis_input.text().strip())
             if not self.analysis_input.text().strip():raise ValueError('Select an input HDF5 file')
             info=inspect_hdf5(source)

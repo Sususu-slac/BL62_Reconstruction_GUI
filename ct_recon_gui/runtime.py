@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parents[1]))
 WORKER_ROOT = APP_ROOT/'worker_code' if getattr(sys,'frozen',False) else APP_ROOT
-VERSION = '1.2.1'
+VERSION = '1.2.6'
 
 def conda_python(name: str) -> str:
     roots = [Path(sys.prefix).parent.parent]
@@ -36,7 +36,7 @@ def defaults() -> dict:
     repo=next((p for p in [Path('D:/SAM3p1/sam3'),APP_ROOT/'sam3_repo',APP_ROOT/'runtime_sam3'] if (p/'sam3').is_dir()),APP_ROOT/'runtime_sam3')
     return dict(sam3_python=conda_python('SAM3p1'), recon_python=reconstruction_python(),
                 repo=str(repo), checkpoint='D:/Chcekpoints/checkpoint_demo_05142026.pt',
-                gpu=1, method='fourierrec', binning=0, chunk_size=4, iterations=20,
+                gpu=1, method='fourierrec', remove_stripe_method='vo-all', dezinger=0, dezinger_threshold=5000, filter_name='parzen', bright_ratio=1., minus_log=True, flat_linear=False, binning=0, chunk_size=4, iterations=20,
                 output_root='', start_row=None, end_row=None, search_row=None,
                 range_low=None, range_high=None, initial_step=None, target_step=.25,
                 search_method='fourierrec', confidence=.2, nms_iou=.5, refresh_seconds=3, theme='dark')

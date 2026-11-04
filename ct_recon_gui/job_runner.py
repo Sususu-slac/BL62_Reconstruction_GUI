@@ -6,7 +6,7 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
+from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, QTimer, Signal
 
 from .commands import build_wsl_argv, display_command
 from .models import ReconJob
@@ -26,10 +26,47 @@ def file_signature(path: Path) -> tuple[int, int, int]:
     return stat.st_mtime_ns, size, checksum
 
 
+class ResultScan(QThread):
+    """Perform directory enumeration and TIFF signatures outside the GUI thread."""
+    def __init__(self, runner, force):
+        super().__init__(runner)
+        self.output = runner.output_dir
+        self.signatures = dict(runner.signatures)
+        self.pending = dict(runner.pending_signatures)
+        self.force = force
+        self.paths = []
+        self.error = None
+
+    def run(self):
+        try:
+            for path in sorted((*self.output.rglob('*.tif'), *self.output.rglob('*.tiff'))):
+                try:
+                    signature = file_signature(path)
+                except OSError:
+                    self.pending.pop(path, None)
+                    continue
+                if not signature[1]:
+                    continue
+                if self.signatures.get(path) == signature:
+                    self.pending.pop(path, None)
+                    continue
+                old = self.pending.get(path)
+                stable = old[1] + 1 if old and old[0] == signature else 1
+                if not self.force and stable < 2:
+                    self.pending[path] = (signature, stable)
+                    continue
+                self.pending.pop(path, None)
+                self.signatures[path] = signature
+                self.paths.append(str(path))
+        except OSError as error:
+            self.error = str(error)
+
+
 class JobRunner(QObject):
     log = Signal(str)
     state_changed = Signal(str)
     result_found = Signal(str)
+    results_found = Signal(list)
     finished = Signal(bool, str)
 
     def __init__(self, parent=None) -> None:
@@ -41,15 +78,17 @@ class JobRunner(QObject):
         self.process.errorOccurred.connect(lambda error: self.log.emit(f"Process error: {error}"))
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
-        self.timer.timeout.connect(self._scan_results)
+        self.timer.timeout.connect(self._request_scan)
         self.stopping = False
         self.output_dir: Path | None = None
         self.signatures: dict[Path, tuple[int, int, int]] = {}
         self.pending_signatures: dict[Path, tuple[tuple[int, int, int], int]] = {}
+        self._scan_task = None
+        self._completion = None
 
     @property
     def running(self) -> bool:
-        return self.process.state() != QProcess.ProcessState.NotRunning
+        return self.process.state() != QProcess.ProcessState.NotRunning or self._completion is not None or self._scan_task is not None
 
     def start(self, job: ReconJob) -> None:
         if self.running:
@@ -80,6 +119,7 @@ class JobRunner(QObject):
     def stop(self) -> None:
         if not self.running or self.stopping:return
         self.stopping=True;self.state_changed.emit('Stopping');self.log.emit('Safely stopping this job and its child processes…')
+        if self.process.state() == QProcess.ProcessState.NotRunning:return
         pid=int(self.process.processId())
         import threading
         threading.Thread(target=terminate_tree,args=(pid,),daemon=True).start()
@@ -88,38 +128,51 @@ class JobRunner(QObject):
         text = bytes(self.process.readAllStandardOutput()).decode(errors="replace")
         if self.output_dir and text:
             with (self.output_dir/'gui_run.log').open('a',encoding='utf-8') as handle:handle.write(text)
-        for line in text.splitlines():
-            self.log.emit(line)
+        if text:self.log.emit(text.replace("\r", "\n").rstrip("\n"))
 
-    def _scan_results(self, *, force: bool = False) -> None:
-        if not self.output_dir or not self.output_dir.exists():
-            return
-        candidates = sorted((*self.output_dir.rglob("*.tif"), *self.output_dir.rglob("*.tiff")))
-        for path in candidates:
-            try:
-                signature = file_signature(path)
-            except OSError:
-                self.pending_signatures.pop(path, None)
-                continue
-            if signature[1] == 0:
-                continue
-            if self.signatures.get(path) == signature:
-                self.pending_signatures.pop(path, None)
-                continue
-            if not force:
-                pending = self.pending_signatures.get(path)
-                stable_count = pending[1] + 1 if pending and pending[0] == signature else 1
-                if stable_count < 2:
-                    self.pending_signatures[path] = (signature, stable_count)
-                    continue
-            self.pending_signatures.pop(path, None)
-            self.signatures[path] = signature
-            self.result_found.emit(str(path))
+    def _request_scan(self, *, force=False):
+        if self._scan_task is not None or self.output_dir is None:return
+        task = ResultScan(self, force)
+        self._scan_task = task
+        task.finished.connect(self._scan_completed)
+        task.start()
+
+    def _accept_scan(self, task):
+        self.signatures = task.signatures
+        self.pending_signatures = task.pending
+        if task.error:self.log.emit('Result scan warning: ' + task.error)
+        if task.paths:
+            self.results_found.emit(task.paths)
+            for path in task.paths:self.result_found.emit(path)
+
+    def _scan_completed(self):
+        task = self._scan_task
+        self._scan_task = None
+        self._accept_scan(task)
+        final = task.force
+        task.deleteLater()
+        if self._completion is not None:
+            if final:self._complete()
+            else:self._request_scan(force=True)
+
+    def _scan_results(self, *, force=False):
+        # Synchronous helper for callers without an event loop; GUI uses _request_scan.
+        if self.output_dir is None:return
+        task = ResultScan(self, force)
+        task.run()
+        self._accept_scan(task)
+        task.deleteLater()
 
     def _finished(self, exit_code: int, _status) -> None:
         self.timer.stop()
         self._read_output()
-        self._scan_results(force=True)
+        self._completion = exit_code
+        self.state_changed.emit('Finalizing results')
+        self._request_scan(force=True)
+
+    def _complete(self):
+        exit_code = self._completion
+        self._completion = None
         ok = exit_code == 0 and not self.stopping
         state = "Stopped" if self.stopping else "Completed" if ok else "Failed"
         self.state_changed.emit(state)
