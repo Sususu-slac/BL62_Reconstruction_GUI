@@ -151,7 +151,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             args = self._tomocupy_args(Path(temp))
             with patch("backend_runner.tomocupy_executable", return_value=Path("tomocupy.exe")), \
-                 patch("backend_runner.subprocess.run"):
+                 patch("backend_runner.run_logged_command", return_value={}):
                 command, metadata = run_tomocupy(args)
             self.assertEqual(command[command.index("--reconstruction-type") + 1], "try")
             self.assertEqual(command[command.index("--start-row") + 1], "0")
@@ -164,7 +164,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             args = self._tomocupy_args(Path(temp), method="lamino_linerec", search_kind="center")
             with patch("backend_runner.tomocupy_executable", return_value=Path("tomocupy.exe")), \
-                 patch("backend_runner.subprocess.run"):
+                 patch("backend_runner.run_logged_command", return_value={}):
                 command, metadata = run_tomocupy(args)
             self.assertEqual(command[1], "recon_steps")
             self.assertEqual(command[command.index("--reconstruction-type") + 1], "try")
@@ -177,7 +177,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             args = self._tomocupy_args(Path(temp), method="lamino_linerec", search_kind="angle")
             with patch("backend_runner.tomocupy_executable", return_value=Path("tomocupy.exe")), \
-                 patch("backend_runner.subprocess.run"):
+                 patch("backend_runner.run_logged_command", return_value={}):
                 command, metadata = run_tomocupy(args)
             self.assertEqual(command[1], "recon_steps")
             self.assertEqual(command[command.index("--reconstruction-type") + 1], "try_lamino")
@@ -192,7 +192,7 @@ class CoreTests(unittest.TestCase):
             with self.subTest(method=method), tempfile.TemporaryDirectory() as temp:
                 args = self._tomocupy_args(Path(temp), method=method, reconstruction_type="full")
                 with patch("backend_runner.tomocupy_executable", return_value=Path("tomocupy.exe")), \
-                     patch("backend_runner.subprocess.run"):
+                     patch("backend_runner.run_logged_command", return_value={}):
                     command, _ = run_tomocupy(args)
                 self.assertEqual(command[1], "recon_steps")
                 self.assertEqual(command[command.index("--reconstruction-algorithm") + 1], algorithm)

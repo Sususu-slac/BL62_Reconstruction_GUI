@@ -12,6 +12,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 from ct_recon_gui.preprocessing import add_arguments as preprocessing_arguments, argv as preprocessing_argv
+from ct_recon_gui.geometry import output_row_limit
 
 
 TOMOCUPY_METHODS = {"fourierrec", "lprec", "linerec"}
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--binning", type=int, choices=(0, 1, 2, 3), default=0)
     p.add_argument("--lamino-angle", type=float, default=20); p.add_argument("--center-search-width", type=float, default=50)
     p.add_argument("--center-search-step", type=float, default=.5)
+    p.add_argument("--inclusive-center-search", action="store_true")
     p.add_argument("--lamino-search-width", type=float, default=5); p.add_argument("--lamino-search-step", type=float, default=.25)
     p.add_argument("--accept-uniform-angle-approximation", action="store_true")
     preprocessing_arguments(p)
@@ -47,7 +49,8 @@ def validate(args: argparse.Namespace) -> tuple[int, int, int]:
         missing = [key for key in required if key not in f]
         if missing: raise KeyError(f"Missing HDF5 datasets: {missing}")
         nproj, nrow, width = f["exchange/data"].shape
-        if not 0 <= args.start_row < args.end_row <= nrow: raise ValueError("Invalid row range")
+        limit = output_row_limit(nrow, "laminography", args.lamino_angle, args.binning) if args.method.startswith("lamino_") and args.reconstruction_type == "full" else nrow
+        if not 0 <= args.start_row < args.end_row <= limit: raise ValueError("Invalid reconstruction-output row range")
         if args.reconstruction_type == "full" and args.end_row - args.start_row < 2 ** args.binning:
             raise ValueError("Row range is smaller than the selected binning factor")
         if args.reconstruction_type == "try" and (args.try_row is None or not 0 <= args.try_row < nrow):
@@ -80,6 +83,30 @@ def equal_angle_view(source: Path, output: Path) -> Path:
         exchange.attrs["theta_substitution"] = "uniform [0,180) approximation for LpRec"
         exchange.attrs["original_file"] = str(source)
     return output
+
+
+def run_logged_command(command, child_env):
+    stage_patterns = (("Reading data.", "reading"), ("Processing by chunks in z.", "preprocessing_z"),
+                      ("Processing by chunks in angles.", "preprocessing_angles"),
+                      ("Filtered backprojection and writing by chunks.", "reconstruction_write"))
+    stages = {}
+    clock = time.perf_counter()
+    stage, since = "startup", clock
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                          encoding="utf-8", errors="replace", env=child_env) as child:
+        for line in child.stdout:
+            print(line, end="", flush=True)
+            for marker, following in stage_patterns:
+                if marker in line:
+                    now = time.perf_counter()
+                    stages[stage] = stages.get(stage, 0.0) + now - since
+                    stage, since = following, now
+                    break
+        code = child.wait()
+    stages[stage] = stages.get(stage, 0.0) + time.perf_counter() - since
+    if code:
+        raise subprocess.CalledProcessError(code, command)
+    return stages
 
 
 def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
@@ -124,9 +151,20 @@ def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
-    subprocess.run(command, check=True, env=child_env)
+    if args.reconstruction_type == "try" and args.search_kind == "center" and getattr(args, "inclusive_center_search", False):
+        command[:1] = [sys.executable, str(Path(__file__).with_name("tomocupy_manual_entry.py"))]
+    stages = run_logged_command(command, child_env)
     factor = 2 ** args.binning
+    count = (args.end_row - args.start_row) // factor
+    fixed = sum(v for k, v in stages.items() if k != "reconstruction_write")
+    timing = {"stages_seconds": stages, "fixed_seconds": fixed,
+              "reconstruction_write_seconds": stages.get("reconstruction_write"),
+              "work_units": int(np.ceil(count / args.chunk_size)) if is_lamino and method == "linerec" else count,
+              "unit": "output_chunks" if is_lamino and method == "linerec" else "output_slices"}
     return command, {"uniform_angle_approximation": approximation,
+                     "timing_components": timing,
+                     "inclusive_center_search": bool(getattr(args, "inclusive_center_search", False)),
+                     "projection_rows": [0, nrow] if is_lamino else [command_start_row, command_end_row],
                      "effective_input": str(source), "original_input": str(args.input),
                      "requested_reconstruction_type": args.reconstruction_type,
                      "search_kind": args.search_kind,

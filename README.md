@@ -16,7 +16,7 @@ Windows GUI for manual tomography/laminography reconstruction and SAM3-assisted 
 ## Windows installation
 
 1. Install the NVIDIA driver and Miniforge.
-2. Run `BL62_Reconstruction_GUI_Setup_1.2.6.exe`, or extract the portable ZIP.
+2. Run `BL62_Reconstruction_GUI_Setup_1.2.7.exe`, or extract the portable ZIP.
 3. Use **Install Environments** to prepare two isolated native Windows environments:
    - `tomocupy_astra`: reconstruction (Python 3.10).
    - `SAM3p1`: SAM3 inference (Python 3.12, PyTorch 2.10.0 CUDA 12.8).
@@ -94,3 +94,7 @@ Choose Instance under Analysis Target, click Add Image, paint the reference feat
 ## November 4 update — 1.2.6
 
 Right-aligned Advanced Settings with a compact gear, a shared Parameter Optimization viewer, image-derived trial defaults, Vo-all preprocessing controls and responsive background result collection/preview. The user has confirmed working tomography and laminography reconstruction with correct flat-field calibration. See [the release notes](docs/RELEASE_1.2.6.md) for changes and validation scope.
+
+## Latest maintenance update
+
+See [release 1.2.7](docs/RELEASE_1.2.7.md) for manual laminography range, center-trial and workflow fixes and the precise validation scope.

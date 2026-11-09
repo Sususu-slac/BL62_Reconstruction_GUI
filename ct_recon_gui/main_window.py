@@ -23,6 +23,7 @@ from .themes import colors_for, palette_for, stylesheet_for, theme_name
 from .commands import build_wsl_argv, display_command
 from .exporter import ExportJob, ExportWorker
 from .hdf5_inspector import Hdf5Info, frame_count, inspect_hdf5, read_input_frame
+from .geometry import output_row_limit
 from .image_view import ImageView
 from .job_runner import JobRunner
 from .models import GeometryMode, ReconJob, ReconMethod, TOMO_METHODS
@@ -206,6 +207,8 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.center_spin.valueChanged.connect(self._effective_geometry_changed)
         self.start_spin.valueChanged.connect(self._effective_geometry_changed)
         self.end_spin.valueChanged.connect(self._effective_geometry_changed)
+        self.binning_combo.currentIndexChanged.connect(self._effective_geometry_changed)
+        self.lamino_spin.valueChanged.connect(self._effective_geometry_changed)
         self._update_search_tooltips()
         layout.addWidget(params)
 
@@ -439,8 +442,9 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
 
     def _apply_manual_defaults(self,info):
         rows=info.data_shape[1];self.info=info
-        self.start_spin.setRange(0,rows-1);self.end_spin.setRange(1,rows)
-        self.start_spin.setValue(0);self.end_spin.setValue(rows)
+        limit=self._manual_output_limit()
+        self.start_spin.setRange(0,limit-1);self.end_spin.setRange(1,limit)
+        self.start_spin.setValue(0);self.end_spin.setValue(limit)
         self.try_row_spin.setRange(0,rows-1);self.try_row_spin.setValue(rows//2)
         self.center_spin.setRange(0,info.data_shape[2]);self.center_spin.setValue(info.suggested_center)
         self._manual_input_key=self._input_key(info.path);self._update_search_tooltips();self._effective_geometry_changed()
@@ -653,9 +657,29 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             self.export_thread.deleteLater()
         self.export_worker = None; self.export_thread = None
 
+    def _manual_output_limit(self):
+        return output_row_limit(self.info.data_shape[1],self.mode_combo.currentData(),
+                                self.lamino_spin.value(),self.binning_combo.currentData())
+
+    def _update_manual_row_limits(self):
+        if not self.info:return
+        limit=self._manual_output_limit()
+        previous=self.end_spin.maximum()
+        full=self.start_spin.value()==0 and self.end_spin.value()==previous
+        start,end=self.start_spin.value(),self.end_spin.value()
+        self.start_spin.blockSignals(True);self.end_spin.blockSignals(True)
+        self.start_spin.setRange(0,max(0,limit-1));self.end_spin.setRange(1,limit)
+        if full:self.start_spin.setValue(0);self.end_spin.setValue(limit)
+        else:
+            self.start_spin.setValue(min(start,limit-1));self.end_spin.setValue(min(max(end,self.start_spin.value()+1),limit))
+        self.start_spin.blockSignals(False);self.end_spin.blockSignals(False)
+        self.start_spin.setToolTip('Reconstruction output row. Detector search rows are configured separately.')
+        self.end_spin.setToolTip('Reconstruction output row, exclusive. All slices uses the complete lamino height.')
+
     def _effective_geometry_changed(self) -> None:
         if not self.info:
             return
+        self._update_manual_row_limits()
         factor = 2 ** self.binning_combo.currentData()
         effective_start = self.start_spin.value() // factor
         effective_end = effective_start + (self.end_spin.value() - self.start_spin.value()) // factor
@@ -678,6 +702,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.params_form.setRowVisible(self.lamino_row,lamino)
         self.lamino_spin.setEnabled(lamino);self.lamino_settings_btn.setEnabled(lamino);self.find_angle_btn.setEnabled(lamino)
         self.center_settings_btn.setEnabled(True);self._method_changed()
+        self._effective_geometry_changed()
 
     def _method_changed(self) -> None:
         method=self.method_combo.currentData();iterative=method in (ReconMethod.SIRT_CUDA,ReconMethod.CGLS_CUDA)
@@ -703,7 +728,9 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             method=method,
             reconstruction_type=backend_type,
             search_kind="angle" if selected_type == "angle_try" else "center",
-            start_row=self.start_spin.value(), end_row=self.end_spin.value(), try_row=self.try_row_spin.value(), center=self.center_spin.value(),
+            start_row=0 if backend_type=='try' else self.start_spin.value(),
+            end_row=self.info.data_shape[1] if backend_type=='try' and self.info else self.end_spin.value(),
+            try_row=self.try_row_spin.value(), center=self.center_spin.value(),
             gpu=self.gpu_spin.value(), chunk_size=self.chunk_spin.value(), iterations=self.iter_spin.value(),
             stripe_method=self.settings.get('remove_stripe_method','vo-all'),filter_name=self.settings.get('filter_name','parzen'),
             dezinger=self.settings.get('dezinger',0),dezinger_threshold=self.settings.get('dezinger_threshold',5000),bright_ratio=self.settings.get('bright_ratio',1.),minus_log=self.settings.get('minus_log',True),flat_linear=self.settings.get('flat_linear',False),
@@ -734,8 +761,9 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             input_changed = self.info is None or self.info.path.resolve() != current_info.path.resolve()
             self.info = current_info
             nrows = self.info.data_shape[1]
-            if not 0 <= job.start_row < job.end_row <= nrows:
-                raise ValueError(f"Row range [{job.start_row}, {job.end_row}) is outside this input (0..{nrows})")
+            row_limit=output_row_limit(nrows,job.mode,job.lamino_angle,job.binning) if run_type=='full' else nrows
+            if not 0 <= job.start_row < job.end_row <= row_limit:
+                raise ValueError(f"Output row range [{job.start_row}, {job.end_row}) is outside 0..{row_limit}")
             if run_type == "try" and not 0 <= job.try_row < nrows:
                 raise ValueError(f"Try detector row {job.try_row} is outside this input (0..{nrows - 1})")
             if input_changed:

@@ -34,7 +34,7 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
             "--lamino-search-width", str(job.lamino_search_width),
             "--lamino-search-step", str(job.lamino_search_step),
             "--binning", str(job.binning),
-        ] + preprocessing_argv(job.to_json_dict()) + (["--try-row", str(job.try_row)] if job.reconstruction_type == "try" else [])
+        ] + preprocessing_argv(job.to_json_dict()) + (["--try-row", str(job.try_row)] + (["--inclusive-center-search"] if job.search_kind == "center" else []) if job.reconstruction_type == "try" else [])
     argv = [
         reconstruction_python(), str(BACKEND_RUNNER), job.method.value, source, output,
         "--reconstruction-type", job.reconstruction_type,
@@ -46,7 +46,7 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
     if job.reconstruction_type == "try":
         argv += ["--try-row", str(job.try_row),
                  "--center-search-width", str(job.center_search_width),
-                 "--center-search-step", str(job.center_search_step)]
+                 "--center-search-step", str(job.center_search_step), "--inclusive-center-search"]
     if job.method in (ReconMethod.SIRT_CUDA, ReconMethod.CGLS_CUDA):
         argv += ["--iterations", str(job.iterations)]
     if job.method == ReconMethod.LPREC and job.uniform_angle_approximation:

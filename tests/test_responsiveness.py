@@ -41,6 +41,18 @@ class ResponsivenessTest(unittest.TestCase):
   self.assertEqual(window.apply_center_btn.text(),'Apply Selected Parameter')
   self.assertEqual(window.preprocessing_btn.text(),'⚙');self.assertEqual(window.preprocessing_btn.width(),28)
   window.close()
+ def test_partial_tiff_is_not_published_until_complete(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   path=Path(tmp)/'recon_00001.tiff'
+   runner=JobRunner();runner.output_dir=Path(tmp);found=[]
+   runner.results_found.connect(found.extend)
+   path.write_bytes(b'II*\x00\x08\x00\x00\x00')
+   runner._scan_results();runner._scan_results();self.assertEqual(found,[])
+   tifffile.imwrite(path,np.arange(64,dtype=np.float32).reshape(8,8))
+   complete=path.read_bytes();path.write_bytes(complete[:-20])
+   runner._scan_results();runner._scan_results();self.assertEqual(found,[])
+   path.write_bytes(complete)
+   runner._scan_results();runner._scan_results();self.assertEqual(found,[str(path)])
  def test_reset_does_not_restore_stale_background_preview(self):
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'image.tiff';tifffile.imwrite(path,np.ones((64,64),np.float32))

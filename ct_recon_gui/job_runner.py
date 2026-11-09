@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import struct
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,36 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, QTim
 from .commands import build_wsl_argv, display_command
 from .models import ReconJob
 from .process_utils import terminate_tree,clean_environment,external_runtime
+
+
+def tiff_ready(path: Path, size: int) -> bool:
+    """Reject headers and truncated pixel blocks while a writer is still saving."""
+    import tifffile
+    try:
+        with path.open('rb') as handle:
+            header = handle.read(16)
+        if len(header) < 8 or header[:2] not in (b'II', b'MM'):
+            return False
+        endian = '<' if header[:2] == b'II' else '>'
+        version = struct.unpack(endian + 'H', header[2:4])[0]
+        if version == 42:
+            offset = struct.unpack(endian + 'I', header[4:8])[0]
+        elif version == 43 and len(header) == 16:
+            offset = struct.unpack(endian + 'Q', header[8:16])[0]
+        else:
+            return False
+        if offset <= 0 or offset + 2 > size:
+            return False
+        with tifffile.TiffFile(path) as image:
+            if not image.pages:
+                return False
+            page = image.pages[0]
+            return bool(page.dataoffsets) and all(
+                start > 0 and count > 0 and start + count <= size
+                for start, count in zip(page.dataoffsets, page.databytecounts)
+            )
+    except (OSError, ValueError, IndexError, struct.error):
+        return False
 
 
 def file_signature(path: Path) -> tuple[int, int, int]:
@@ -54,6 +85,11 @@ class ResultScan(QThread):
                 stable = old[1] + 1 if old and old[0] == signature else 1
                 if not self.force and stable < 2:
                     self.pending[path] = (signature, stable)
+                    continue
+                if not tiff_ready(path, signature[1]):
+                    self.pending[path] = (signature, stable)
+                    if self.force:
+                        self.error = f'Incomplete TIFF was not added to the viewer: {path}'
                     continue
                 self.pending.pop(path, None)
                 self.signatures[path] = signature
