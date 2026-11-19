@@ -71,6 +71,8 @@ class ResultScan(QThread):
     def run(self):
         try:
             for path in sorted((*self.output.rglob('*.tif'), *self.output.rglob('*.tiff'))):
+                if '.tofu_work' in path.relative_to(self.output).parts:
+                    continue
                 try:
                     signature = file_signature(path)
                 except OSError:
@@ -104,6 +106,7 @@ class JobRunner(QObject):
     result_found = Signal(str)
     results_found = Signal(list)
     finished = Signal(bool, str)
+    progress_changed = Signal(dict)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -121,6 +124,8 @@ class JobRunner(QObject):
         self.pending_signatures: dict[Path, tuple[tuple[int, int, int], int]] = {}
         self._scan_task = None
         self._completion = None
+        self._progress_buffer = ''
+        self._tofu_job = False
 
     @property
     def running(self) -> bool:
@@ -130,6 +135,8 @@ class JobRunner(QObject):
         if self.running:
             raise RuntimeError("A reconstruction job is already running")
         self.stopping = False
+        self._tofu_job = job.method.value == 'lamino_tofu'
+        self._progress_buffer = ''
         argv = build_wsl_argv(job)
         self.output_dir = job.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +162,11 @@ class JobRunner(QObject):
     def stop(self) -> None:
         if not self.running or self.stopping:return
         self.stopping=True;self.state_changed.emit('Stopping');self.log.emit('Safely stopping this job and its child processes…')
+        if self._tofu_job and self.output_dir:
+            # The native bridge forwards cancellation only to this Linux job's
+            # process group. Killing wsl.exe alone would leave Linux children.
+            (self.output_dir/'.stop_requested').touch()
+            return
         if self.process.state() == QProcess.ProcessState.NotRunning:return
         pid=int(self.process.processId())
         import threading
@@ -165,6 +177,14 @@ class JobRunner(QObject):
         if self.output_dir and text:
             with (self.output_dir/'gui_run.log').open('a',encoding='utf-8') as handle:handle.write(text)
         if text:self.log.emit(text.replace("\r", "\n").rstrip("\n"))
+        self._progress_buffer += text
+        while '\n' in self._progress_buffer:
+            line,self._progress_buffer=self._progress_buffer.split('\n',1)
+            if line.startswith('PROGRESS '):
+                try:
+                    value=json.loads(line[9:])
+                    if isinstance(value,dict):self.progress_changed.emit(value)
+                except (ValueError,TypeError):pass
 
     def _request_scan(self, *, force=False):
         if self._scan_task is not None or self.output_dir is None:return

@@ -38,7 +38,8 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertEqual(window.run_btn.text(),'Run Reconstruction')
         self.assertTrue(window.segment_all.isChecked())
         window.mode_combo.setCurrentIndex(window.mode_combo.findData(GeometryMode.LAMINOGRAPHY))
-        self.assertEqual(window.method_combo.count(),2)
+        self.assertEqual(window.method_combo.count(),3)
+        self.assertGreaterEqual(window.method_combo.findData(ReconMethod.LAMINO_TOFU),0)
         self.assertTrue(window.params_form.isRowVisible(window.lamino_row))
         self.assertTrue(window.find_angle_btn.isEnabled())
         self.assertEqual(window.find_center_btn.size(),window.find_angle_btn.size())
@@ -47,6 +48,20 @@ class GuiSmokeTest(unittest.TestCase):
         window.input_edit.setText(r'D:\Data\sample.h5');window.output_edit.setText(r'D:\Output');window.center_spin.setValue(100)
         job=window._job('full');self.assertIsInstance(job.mode,GeometryMode);self.assertIsInstance(job.method,ReconMethod)
         window.close()
+
+    def test_applying_fine_tilt_does_not_round_the_selected_parameter(self):
+        from ct_recon_gui.models import ReconJob
+        with tempfile.TemporaryDirectory() as temp:
+            window=MainWindow();window.mode_combo.setCurrentIndex(window.mode_combo.findData(GeometryMode.LAMINOGRAPHY))
+            window.method_combo.setCurrentIndex(window.method_combo.findData(ReconMethod.LAMINO_TOFU))
+            window.input_edit.setText('input.h5');window.output_edit.setText(temp);window.center_spin.setValue(31.5)
+            window.active_job=ReconJob(Path('input.h5'),Path(temp),mode=GeometryMode.LAMINOGRAPHY,method=ReconMethod.LAMINO_TOFU,center=31.5)
+            window.active_output_dir=Path(temp);window.search_initial_center=31.5
+            window.search_candidate_kind='angle';window.center_candidates=[(30.125,Path(temp)/'recon_angle30.125.tiff')]
+            window.center_candidate_slider.setRange(0,0);window._apply_selected_center()
+            self.assertEqual(window.lamino_spin.value(),30.125)
+            self.assertEqual(window._job('full').lamino_angle,30.125)
+            window.close()
 
     def test_segmentation_widget_identifies_reconstruction_as_completed(self):
         window=MainWindow()
@@ -237,6 +252,13 @@ class GuiSmokeTest(unittest.TestCase):
             self.assertIs(window.center_tabs.currentWidget(), window.reconstruction_tab)
             window.next_result_btn.click()
             self.assertEqual(Path(window.result_combo.currentData()).name, "recon_00011.tiff")
+            # Preview decoding is asynchronous. Let its scheduled request finish
+            # before TemporaryDirectory removes files still open on Windows.
+            from PySide6.QtTest import QTest
+            from PySide6.QtCore import QThreadPool
+            QTest.qWait(150)
+            QThreadPool.globalInstance().waitForDone(5000)
+            self.app.processEvents()
             window.close()
 
 

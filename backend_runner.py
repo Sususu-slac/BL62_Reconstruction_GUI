@@ -9,6 +9,11 @@ import sys
 import time
 from pathlib import Path
 
+if os.name == 'nt':
+    _library = str(Path(sys.prefix)/'Library/bin')
+    os.environ['PATH'] = _library+';'+os.environ.get('PATH','')
+    _dll_directory = os.add_dll_directory(_library)
+
 import h5py
 import numpy as np
 from ct_recon_gui.preprocessing import add_arguments as preprocessing_arguments, argv as preprocessing_argv
@@ -21,7 +26,7 @@ ASTRA_METHODS = {"fbp_cuda", "sirt_cuda", "cgls_cuda"}
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("method", choices=sorted(TOMOCUPY_METHODS | ASTRA_METHODS | {"lamino_fourierrec", "lamino_linerec"}))
+    p.add_argument("method", choices=sorted(TOMOCUPY_METHODS | ASTRA_METHODS | {"lamino_fourierrec", "lamino_linerec", "lamino_tofu"}))
     p.add_argument("input", type=Path); p.add_argument("output", type=Path)
     p.add_argument("--reconstruction-type", choices=("try", "full"), default="try")
     p.add_argument("--search-kind", choices=("center", "angle"), default="center")
@@ -31,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--chunk-size", "--nsino-per-chunk", dest="chunk_size", type=int, default=4)
     p.add_argument("--nproj-per-chunk", type=int, default=8); p.add_argument("--dtype", default="float32")
     p.add_argument("--iterations", type=int, default=20);
+    p.add_argument('--tofu-block-slices',type=int,default=0)
     p.add_argument("--binning", type=int, choices=(0, 1, 2, 3), default=0)
     p.add_argument("--lamino-angle", type=float, default=20); p.add_argument("--center-search-width", type=float, default=50)
     p.add_argument("--center-search-step", type=float, default=.5)
@@ -45,7 +51,7 @@ def validate(args: argparse.Namespace) -> tuple[int, int, int]:
     if args.method in {"linerec", "lamino_linerec"} and args.chunk_size < 4:
         raise ValueError("LineRec requires chunk size >= 4 because smaller chunks can silently produce zero images")
     with h5py.File(args.input, "r") as f:
-        required = ("exchange/data", "exchange/data_white", "exchange/data_dark", "exchange/theta")
+        required = ("exchange/data", "exchange/theta") + (("exchange/data_white", "exchange/data_dark") if args.data_state=="raw" else ())
         missing = [key for key in required if key not in f]
         if missing: raise KeyError(f"Missing HDF5 datasets: {missing}")
         nproj, nrow, width = f["exchange/data"].shape
@@ -110,17 +116,29 @@ def run_logged_command(command, child_env):
 
 
 def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
+    if not hasattr(args,'data_state'):args.data_state='raw'
     is_lamino = args.method in {"lamino_fourierrec", "lamino_linerec"}
     method = {"lamino_fourierrec": "fourierrec", "lamino_linerec": "linerec"}.get(args.method, args.method)
     with h5py.File(args.input, "r") as handle:
         _, nrow, width = handle["exchange/data"].shape
     effective_reconstruction_type = "try_lamino" if is_lamino and args.reconstruction_type == "try" and args.search_kind == "angle" else args.reconstruction_type
     source = args.input
+    from ct_recon_gui.tofu_contract import projection_angles
+    with h5py.File(source,'r') as h:
+        angles,angle_info=projection_angles(h['exchange/theta'][:],h['exchange/theta'].attrs.get('units',''))
+    if angle_info['theta_unit']=='radians':
+        converted=args.output/'theta_degrees_view.h5'
+        with h5py.File(source,'r') as h,h5py.File(converted,'w') as out:
+            ex=out.create_group('exchange')
+            for name in h['exchange']:
+                if name!='theta':ex[name]=h5py.ExternalLink(str(source.resolve()),'/exchange/'+name)
+            ex.create_dataset('theta',data=np.rad2deg(angles).astype(np.float32)).attrs['units']='degrees'
+        source=converted
     approximation = False
     if method == "lprec":
         if not args.accept_uniform_angle_approximation:
             raise ValueError("LpRec requires explicit acceptance of the uniform [0,180) theta approximation")
-        source = equal_angle_view(args.input, args.output / "equal_angle_view.h5")
+        source = equal_angle_view(source, args.output / "equal_angle_view.h5")
         approximation = True
     command_start_row = 0 if args.reconstruction_type == "try" or is_lamino else args.start_row
     command_end_row = nrow if args.reconstruction_type == "try" or is_lamino else args.end_row
@@ -153,6 +171,14 @@ def run_tomocupy(args: argparse.Namespace) -> tuple[list[str], dict]:
     }
     if args.reconstruction_type == "try" and args.search_kind == "center" and getattr(args, "inclusive_center_search", False):
         command[:1] = [sys.executable, str(Path(__file__).with_name("tomocupy_manual_entry.py"))]
+    if args.data_state!='raw':
+        from ct_recon_gui.input_state import tomocupy_view
+        source=tomocupy_view(source,args.output/'processed_input_adapter.h5',args.data_state)
+        command[command.index('--file-name')+1]=str(source)
+        skip=2 if command[0]==sys.executable else 1
+        command[:skip]=[sys.executable,str(Path(__file__).with_name('tomocupy_state_entry.py'))]
+        child_env['BL62_INPUT_STATE']=args.data_state
+        child_env['BL62_INCLUSIVE_CENTER_SEARCH']='1' if getattr(args,'inclusive_center_search',False) else '0'
     stages = run_logged_command(command, child_env)
     factor = 2 ** args.binning
     count = (args.end_row - args.start_row) // factor
@@ -207,7 +233,7 @@ def preprocess_astra(raw,flat,dark,args):
     import cupy as cp
     from types import SimpleNamespace
     from tomocupy.processing import proc_functions as proc
-    if getattr(args,'flat_linear',False) and flat.shape[0]<3:raise ValueError('Flat-linear needs at least three flat frames')
+    if getattr(args,'data_state','raw')=='raw' and getattr(args,'flat_linear',False) and flat.shape[0]<3:raise ValueError('Flat-linear needs at least three flat frames')
     old_args,old_params=proc.args,proc.params
     proc.args=SimpleNamespace(dtype='float32',dezinger=getattr(args,'dezinger',0),dezinger_threshold=getattr(args,'dezinger_threshold',5000),bright_ratio=getattr(args,'bright_ratio',1.),flat_linear=str(getattr(args,'flat_linear',False)))
     proc.params=SimpleNamespace(nproj=raw.shape[0]);functions=proc.ProcFunctions.__new__(proc.ProcFunctions)
@@ -216,10 +242,13 @@ def preprocess_astra(raw,flat,dark,args):
         with cp.cuda.Device(args.gpu):
             for start in range(0,raw.shape[1],args.chunk_size):
                 stop=min(start+args.chunk_size,raw.shape[1])
-                data=functions.remove_outliers(cp.asarray(raw[:,start:stop],dtype=cp.float32))
-                white=functions.remove_outliers(cp.asarray(flat[:,start:stop],dtype=cp.float32))
-                black=functions.remove_outliers(cp.asarray(dark[:,start:stop],dtype=cp.float32))
-                transmission=cp.asnumpy(functions.darkflat_correction(data,black,white))
+                data=cp.asarray(raw[:,start:stop],dtype=cp.float32)
+                if getattr(args,'data_state','raw')=='raw':
+                    data=functions.remove_outliers(data)
+                    white=functions.remove_outliers(cp.asarray(flat[:,start:stop],dtype=cp.float32))
+                    black=functions.remove_outliers(cp.asarray(dark[:,start:stop],dtype=cp.float32))
+                    transmission=cp.asnumpy(functions.darkflat_correction(data,black,white))
+                else:transmission=cp.asnumpy(data)
                 transmission=remove_astra_stripes(transmission,args)
                 result[:,start:stop]=cp.asnumpy(functions.minus_log(cp.asarray(transmission))) if getattr(args,'minus_log',True) else transmission
     finally:proc.args,proc.params=old_args,old_params
@@ -231,8 +260,8 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
     import tifffile
     if not astra.use_cuda(): raise RuntimeError("ASTRA CUDA backend is unavailable")
     with h5py.File(args.input, "r") as f:
-        theta0 = f["exchange/theta"][:].astype(np.float32)
-        theta = np.deg2rad(theta0) if np.max(np.abs(theta0)) > 2*np.pi else theta0
+        from ct_recon_gui.tofu_contract import projection_angles
+        theta=projection_angles(f['exchange/theta'][:],f['exchange/theta'].attrs.get('units',''))[0].astype(np.float32)
         factor = 2 ** args.binning
         effective_width = width // factor
         cropped_width = effective_width * factor
@@ -251,7 +280,7 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
             dataset=f[name]
             a=dataset[:,args.start_row:raw_end,:cropped_width] if dataset.ndim==3 else dataset[args.start_row:raw_end,:cropped_width][None]
             return a.astype(np.float32).reshape(a.shape[0],usable_rows//factor,factor,effective_width,factor).mean(axis=(2,4))
-        flat_b=fields('exchange/data_white');dark_b=fields('exchange/data_dark')
+        flat_b=fields('exchange/data_white') if args.data_state=='raw' else None;dark_b=fields('exchange/data_dark') if args.data_state=='raw' else None
         batch=preprocess_astra(raw,flat_b,dark_b,args)
         effective_start = args.start_row // factor
         for start in range(0, batch.shape[1], args.chunk_size):
@@ -284,10 +313,24 @@ def run_astra(args: argparse.Namespace, width: int) -> tuple[list[str], dict]:
 
 
 def main() -> int:
-    args = parse_args(); _, _, width = validate(args); args.output.mkdir(parents=True, exist_ok=True)
+    for stream in (sys.stdout,sys.stderr):
+        if hasattr(stream,"reconfigure"):stream.reconfigure(encoding="utf-8",errors="replace")
+    args = parse_args()
+    from ct_recon_gui.input_state import resolve,validate_options,effective_options
+    args.data_state=resolve(args.input,args.data_state)
+    validate_options(vars(args))
+    args.minus_log=effective_options(vars(args))['minus_log']
+    _, _, width = validate(args); args.output.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
-    command, method_metadata = run_astra(args, width) if args.method in ASTRA_METHODS else run_tomocupy(args)
-    metadata = {"environment": "tomocupy_astra", "preprocessing":__import__("ct_recon_gui.preprocessing",fromlist=["values"]).values(vars(args)), "remove_stripe_method":args.remove_stripe_method, "method": args.method, "input": str(args.input),
+    if args.method == 'lamino_tofu':
+        from tofu_prepare import run, Cancelled
+        try:command,method_metadata=run(args)
+        except Cancelled:
+            print('Stopped safely; completed images were retained',flush=True)
+            return 130
+    else:
+        command, method_metadata = run_astra(args, width) if args.method in ASTRA_METHODS else run_tomocupy(args)
+    metadata = {"environment": "tomocupy_astra", "data_state":args.data_state, "preprocessing":__import__("ct_recon_gui.preprocessing",fromlist=["values"]).values(vars(args)), "remove_stripe_method":args.remove_stripe_method, "method": args.method, "input": str(args.input),
                 "output": str(args.output), "command": command, "elapsed_seconds": time.perf_counter()-started,
                 "binning_exponent": args.binning, "binning_factor": 2 ** args.binning,
                 "original_center": args.center, "original_rows": [args.start_row, args.end_row],

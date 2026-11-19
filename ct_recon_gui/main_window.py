@@ -38,6 +38,7 @@ METHOD_LABELS = {
     ReconMethod.CGLS_CUDA: "CGLS_CUDA — ASTRA",
     ReconMethod.LAMINO_FOURIERREC: "FourierRec — TomocuPy Laminography",
     ReconMethod.LAMINO_LINEREC: "LineRec — TomocuPy Laminography",
+    ReconMethod.LAMINO_TOFU: "Tofu/UFO GPU (Experimental)",
 }
 
 
@@ -73,6 +74,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         self.runner = JobRunner(self)
         self.runner.log.connect(self.append_log)
         self.runner.state_changed.connect(self._set_state)
+        self.runner.progress_changed.connect(self._manual_progress)
         self.runner.results_found.connect(self._new_results)
         self.runner.finished.connect(self._job_finished)
         self.settings = load_settings()
@@ -134,6 +136,13 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         browse.clicked.connect(self._choose_input)
         row = QHBoxLayout(); row.addWidget(self.input_edit); row.addWidget(browse)
         form.addRow("Input", row)
+        self.data_state_combo=QComboBox()
+        from .input_state import LABELS
+        self.data_state_combo.addItem('Choose preparation…','unknown')
+        for state,label in LABELS.items():self.data_state_combo.addItem(label,state)
+        self.data_state_combo.setCurrentIndex(1)
+        self.data_state_combo.currentIndexChanged.connect(self._data_state_changed)
+        form.addRow('Data Preparation',self.data_state_combo)
         self.output_edit = QLineEdit()
         out_btn = QPushButton("Browse")
         out_btn.clicked.connect(self._choose_output)
@@ -173,7 +182,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             self.binning_combo.addItem(label, exponent)
         self.binning_combo.currentIndexChanged.connect(self._effective_geometry_changed)
         self.iter_spin = QSpinBox(); self.iter_spin.setRange(1, 10000); self.iter_spin.setValue(20)
-        self.lamino_spin = QDoubleSpinBox(); self.lamino_spin.setRange(-89.9, 89.9); self.lamino_spin.setValue(20)
+        self.lamino_spin = QDoubleSpinBox(); self.lamino_spin.setRange(-89.9, 89.9); self.lamino_spin.setDecimals(3); self.lamino_spin.setValue(20)
         self.type_combo = QComboBox()
         self.type_combo.addItem("Try Rotation Center", "center_try")
         self.type_combo.addItem("Try Lamino Angle", "angle_try")
@@ -222,9 +231,15 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
     def _open_preprocessing(self):
         if self.runner.running or self.analysis_runner.running:return
         from .preprocessing_dialog import PreprocessingDialog
-        dialog=PreprocessingDialog(self.settings,self)
+        options=dict(self.settings);state=self.data_state_combo.currentData()
+        if state!='raw':options.update(remove_stripe_method='none',dezinger=0,bright_ratio=1.,flat_linear=False,minus_log=state=='normalized')
+        dialog=PreprocessingDialog(options,self)
+        if state!='raw':
+            for widget in (dialog.editor.stripe,dialog.editor.dezinger,dialog.editor.threshold,dialog.editor.ratio,dialog.editor.linear,dialog.editor.log):widget.setEnabled(False)
         if dialog.exec()==QDialog.DialogCode.Accepted:
-            self.settings.update(dialog.editor.settings());save_settings(self.settings)
+            values=dialog.editor.settings()
+            if state!='raw':values={'filter_name':values['filter_name']}
+            self.settings.update(values);save_settings(self.settings)
 
     def _open_center_settings(self) -> None:
         dialog = QDialog(self); dialog.setWindowTitle("Rotation Center Search Settings")
@@ -274,6 +289,33 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         )
 
     def _export_panel(self) -> QWidget:
+        self._legacy_export_box=self._legacy_export_panel();self._legacy_export_box.setParent(self);self._legacy_export_box.hide()
+        box=QGroupBox('Convert Data');layout=QVBoxLayout(box)
+        for label,direction in [('Images → H5','import'),('H5 → Images','export')]:
+            button=QPushButton(label);button.clicked.connect(lambda checked=False,d=direction:self._open_conversion(d));layout.addWidget(button)
+        return box
+
+    def _open_conversion(self,direction):
+        from .conversion_dialog import ConversionDialog
+        dialog=ConversionDialog(direction,self,self.input_edit.text() if direction=='export' else '')
+        dialog.setModal(False);dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose);dialog.show()
+        if not hasattr(self,'_conversions'):self._conversions=[]
+        self._conversions.append(dialog)
+        dialog.destroyed.connect(lambda:self._conversions.remove(dialog) if dialog in self._conversions else None)
+
+    def _data_state_changed(self):
+        if not hasattr(self,'method_combo') or not hasattr(self,'params_box'):return
+        self._mode_changed();self._preview_cache.clear()
+        if hasattr(self,'input_source_combo') and self.info:
+            state=self.data_state_combo.currentData()
+            for i in range(self.input_source_combo.count()):
+                source=self.input_source_combo.itemData(i)
+                enabled=not ((source=='flat' and not self.info.white_shape) or (source=='dark' and not self.info.dark_shape) or (source=='corrected' and state in ('attenuation','unknown')) or (source=='attenuation' and state=='unknown'))
+                self.input_source_combo.model().item(i).setEnabled(enabled)
+            if not self.input_source_combo.model().item(self.input_source_combo.currentIndex()).isEnabled():self.input_source_combo.setCurrentIndex(0)
+            self._schedule_input_frame()
+
+    def _legacy_export_panel(self) -> QWidget:
         box = QGroupBox("Export Tools")
         form = QFormLayout(box)
         self.export_source_combo = QComboBox()
@@ -442,6 +484,8 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
 
     def _apply_manual_defaults(self,info):
         rows=info.data_shape[1];self.info=info
+        self.data_state_combo.setCurrentIndex(self.data_state_combo.findData(info.data_state or 'unknown'))
+        self._data_state_changed()
         limit=self._manual_output_limit()
         self.start_spin.setRange(0,limit-1);self.end_spin.setRange(1,limit)
         self.start_spin.setValue(0);self.end_spin.setValue(limit)
@@ -505,7 +549,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         key = (source, index, exponent)
         try:
             if key not in self._preview_cache:
-                image, angle = read_input_frame(self.info.path, source, index)
+                image, angle = read_input_frame(self.info.path, source, index,self.data_state_combo.currentData())
                 factor = 2 ** exponent
                 if factor > 1:
                     height, width = image.shape
@@ -694,8 +738,11 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
     def _mode_changed(self) -> None:
         mode = self.mode_combo.currentData(); previous = self.method_combo.currentData()
         self.method_combo.blockSignals(True); self.method_combo.clear()
-        methods = TOMO_METHODS if mode == GeometryMode.TOMOGRAPHY else (ReconMethod.LAMINO_FOURIERREC, ReconMethod.LAMINO_LINEREC)
-        for method in methods:self.method_combo.addItem(METHOD_LABELS[method],method)
+        methods = TOMO_METHODS if mode == GeometryMode.TOMOGRAPHY else (ReconMethod.LAMINO_FOURIERREC, ReconMethod.LAMINO_LINEREC, ReconMethod.LAMINO_TOFU)
+        from .input_state import supported
+        state=self.data_state_combo.currentData()
+        for method in methods:
+            if supported(method,state):self.method_combo.addItem(METHOD_LABELS[method],method)
         index=self.method_combo.findData(previous);self.method_combo.setCurrentIndex(index if index>=0 else 0);self.method_combo.blockSignals(False)
         lamino=mode==GeometryMode.LAMINOGRAPHY
         self.params_box.setTitle('Laminography parameters' if lamino else 'Tomography parameters')
@@ -708,6 +755,7 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         method=self.method_combo.currentData();iterative=method in (ReconMethod.SIRT_CUDA,ReconMethod.CGLS_CUDA)
         self.iter_spin.setEnabled(iterative);self.params_form.setRowVisible(self.iter_spin,iterative)
         if method in (ReconMethod.LINEREC,ReconMethod.LAMINO_LINEREC) and self.chunk_spin.value()<4:self.chunk_spin.setValue(4)
+        if method==ReconMethod.LAMINO_TOFU and self.chunk_spin.value()<32:self.chunk_spin.setValue(32)
 
     def _start_search(self, kind: str) -> None:
         index=self.type_combo.findData('angle_try' if kind=='angle' else 'center_try')
@@ -720,10 +768,15 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
         backend_type = run_type or ("full" if selected_type == "full" else "try")
         method=ReconMethod(self.method_combo.currentData())
         if backend_type=='try':
-            if self.mode_combo.currentData()==GeometryMode.LAMINOGRAPHY:method=ReconMethod.LAMINO_LINEREC
+            if self.mode_combo.currentData()==GeometryMode.LAMINOGRAPHY and method!=ReconMethod.LAMINO_TOFU:method=ReconMethod.LAMINO_LINEREC
             elif method in (ReconMethod.FBP_CUDA,ReconMethod.SIRT_CUDA,ReconMethod.CGLS_CUDA):method=ReconMethod.FOURIERREC
+        state=self.data_state_combo.currentData()
+        if state not in ('raw','normalized','attenuation'):raise ValueError('Choose Data Preparation before reconstructing')
+        options=dict(self.settings)
+        if state!='raw':options.update(remove_stripe_method='none',dezinger=0,bright_ratio=1.,flat_linear=False,minus_log=state=='normalized')
         return ReconJob(
             input_path=Path(self.input_edit.text()), output_dir=Path(self.output_edit.text()),
+            data_state=self.data_state_combo.currentData(),
             mode=GeometryMode(self.mode_combo.currentData()),
             method=method,
             reconstruction_type=backend_type,
@@ -732,8 +785,8 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             end_row=self.info.data_shape[1] if backend_type=='try' and self.info else self.end_spin.value(),
             try_row=self.try_row_spin.value(), center=self.center_spin.value(),
             gpu=self.gpu_spin.value(), chunk_size=self.chunk_spin.value(), iterations=self.iter_spin.value(),
-            stripe_method=self.settings.get('remove_stripe_method','vo-all'),filter_name=self.settings.get('filter_name','parzen'),
-            dezinger=self.settings.get('dezinger',0),dezinger_threshold=self.settings.get('dezinger_threshold',5000),bright_ratio=self.settings.get('bright_ratio',1.),minus_log=self.settings.get('minus_log',True),flat_linear=self.settings.get('flat_linear',False),
+            stripe_method=options.get('remove_stripe_method','vo-all'),filter_name=options.get('filter_name','parzen'),
+            dezinger=options.get('dezinger',0),dezinger_threshold=options.get('dezinger_threshold',5000),bright_ratio=options.get('bright_ratio',1.),minus_log=options.get('minus_log',True),flat_linear=options.get('flat_linear',False),
             lamino_angle=self.lamino_spin.value(), binning=self.binning_combo.currentData(),
             center_search_width=self.search_width_spin.value(), center_search_step=self.search_step_spin.value(),
             lamino_search_width=self.lamino_search_width_spin.value(), lamino_search_step=self.lamino_search_step_spin.value(),
@@ -757,6 +810,8 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             self.active_selected_type = selected_type
             # Re-read the exact path for every run. A manually changed input
             # must never reuse dimensions or theta metadata from the last HDF5.
+            from .input_state import resolve
+            resolve(job.input_path,job.data_state)
             current_info = inspect_hdf5(job.input_path)
             input_changed = self.info is None or self.info.path.resolve() != current_info.path.resolve()
             self.info = current_info
@@ -812,9 +867,24 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
 
     def _set_state(self, state: str) -> None:
         self.state_label.setText(state)
+        if state=='Running':
+            self.progress.setRange(0,0);self.progress.setFormat('%p%')
         running = state in ("Running", "Stopping", "Finalizing results")
         self.progress.setVisible(running); self.stop_btn.setEnabled(state == "Running")
         self._update_busy()
+
+    def _manual_progress(self, value: dict) -> None:
+        if self.runner.stopping:return
+        stage=value.get('stage','Working');done=int(value.get('completed',0));total=int(value.get('total',0))
+        self.state_label.setText(stage)
+        self.progress.setVisible(True)
+        if total>0:
+            self.progress.setRange(0,total);self.progress.setValue(min(done,total))
+            self.progress.setFormat(f'{stage}: {done}/{total}')
+        else:
+            self.progress.setRange(0,0)
+        detail=value.get('detail','')
+        self.progress.setToolTip(detail)
 
     def _new_result(self, path: str) -> None:
         self._new_results([path])
@@ -931,6 +1001,10 @@ class MainWindow(AnalysisUiMixin, QMainWindow):
             self.center_tabs.setCurrentWidget(self.reconstruction_tab)
 
     def closeEvent(self,event):
+        pending=[dialog for dialog in getattr(self,'_conversions',[]) if dialog.task]
+        if pending:
+            for dialog in pending:dialog.close()
+            event.ignore();QTimer.singleShot(250,self.close);return
         if self.runner.running or self.analysis_runner.running or self.export_thread is not None:
             self.runner.stop();self.analysis_runner.stop();self._cancel_export();event.ignore();QTimer.singleShot(500,self.close);return
         if hasattr(self,'gpu_monitor'):

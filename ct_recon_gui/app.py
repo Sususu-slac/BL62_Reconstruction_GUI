@@ -37,9 +37,26 @@ def main() -> int:
             'backend_present':(WORKER_ROOT/'backend_runner.py').is_file(),
             'analysis_worker_present':(WORKER_ROOT/'analysis_worker.py').is_file(),
             'bundled_sam3':(APP_ROOT/'sam3_repo/sam3/model_builder.py').is_file()}
-        target.write_text(json.dumps(report,indent=2));window.close();return 0
+        report['preparation_choices']=window.data_state_combo.count()
+        try:
+            import tempfile
+            import numpy as np
+            import tifffile
+            from .conversion import images_to_h5,h5_to_images
+            from .conversion_dialog import ConversionDialog
+            with tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);source=root/'source.tiff';pixels=np.arange(512,dtype=np.uint16).reshape(16,32);tifffile.imwrite(source,pixels)
+                h5=images_to_h5([source],root/'test.h5',state='attenuation',theta=[0.])
+                output=h5_to_images(h5,'exchange/data',root/'tiff')
+                h5_to_images(h5,'exchange/data',root/'png',format='png',bits=16)
+                report['conversion_roundtrip']=bool(np.array_equal(tifffile.imread(output/'image_000000.tiff'),pixels))
+                for direction in ('import','export'):
+                    dialog=ConversionDialog(direction,window,str(h5) if direction=='export' else '')
+                    report['conversion_dialog_'+direction]=True;dialog.close()
+        except Exception as error:report['conversion_error']=str(error);report['conversion_roundtrip']=False
+        target.write_text(json.dumps(report,indent=2));window.close();return 0 if report['conversion_roundtrip'] else 1
     if '--validation-config' in sys.argv:
         from .release_validation import validate_release
         report=validate_release(app,window,sys.argv[sys.argv.index('--validation-config')+1])
-        app.exec();return 0 if report['manual'] and report['automatic'] else 1
+        app.exec();return 0 if report['manual'] and (report.get('manual_only') or report['automatic']) else 1
     return app.exec()

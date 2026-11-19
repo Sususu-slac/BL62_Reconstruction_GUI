@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 
 
-REQUIRED = ("exchange/data", "exchange/data_white", "exchange/data_dark", "exchange/theta")
+REQUIRED = ("exchange/data", "exchange/theta")
 
 
 @dataclass(slots=True)
@@ -23,6 +23,8 @@ class Hdf5Info:
     theta_max: float
     theta_uniform: bool
     warnings: list[str] = field(default_factory=list)
+
+    data_state: str | None = None
 
     @property
     def suggested_center(self) -> float:
@@ -49,7 +51,9 @@ def inspect_hdf5(path: str | Path) -> Hdf5Info:
         finite = theta[np.isfinite(theta)]
         if finite.size != theta.size:
             raise ValueError("Theta contains NaN or Inf")
-        unit = "degrees" if np.max(np.abs(theta)) > 2 * np.pi + 0.1 else "radians"
+        units=handle['exchange/theta'].attrs.get('units','')
+        if isinstance(units,bytes):units=units.decode()
+        unit = ('degrees' if str(units).lower() in ('degree','degrees','deg') else 'radians' if str(units).lower() in ('radian','radians','rad') else 'degrees' if np.max(np.abs(theta)) > 2 * np.pi + 0.1 else 'radians')
         diffs = np.diff(theta)
         uniform = bool(diffs.size == 0 or np.allclose(diffs, np.median(diffs), rtol=1e-4, atol=1e-6))
         warnings = []
@@ -59,14 +63,15 @@ def inspect_hdf5(path: str | Path) -> Hdf5Info:
             path=path,
             data_shape=tuple(data.shape),
             data_dtype=str(data.dtype),
-            white_shape=tuple(handle["exchange/data_white"].shape),
-            dark_shape=tuple(handle["exchange/data_dark"].shape),
+            white_shape=tuple(handle["exchange/data_white"].shape) if "exchange/data_white" in handle else (),
+            dark_shape=tuple(handle["exchange/data_dark"].shape) if "exchange/data_dark" in handle else (),
             theta_shape=tuple(theta.shape),
             theta_unit=unit,
             theta_min=float(theta.min()),
             theta_max=float(theta.max()),
             theta_uniform=uniform,
             warnings=warnings,
+            data_state=__import__(__package__+".input_state",fromlist=["stored_state"]).stored_state(handle) or ("raw" if all(k in handle for k in ("exchange/data_white","exchange/data_dark")) else None),
         )
 
 
@@ -92,10 +97,10 @@ def frame_count(info: Hdf5Info, source: str) -> int:
         "flat": info.white_shape,
         "dark": info.dark_shape,
     }[source]
-    return shape[0] if len(shape) == 3 else 1
+    return shape[0] if len(shape) == 3 else 1 if shape else 0
 
 
-def read_input_frame(path: str | Path, source: str, index: int) -> tuple[np.ndarray, float | None]:
+def read_input_frame(path: str | Path, source: str, index: int, data_state: str = "auto") -> tuple[np.ndarray, float | None]:
     """Read one preview frame; corrected views use mean flat and dark fields."""
     if source not in (*FRAME_DATASETS, "corrected", "attenuation"):
         raise ValueError(f"Unknown input source: {source}")
@@ -112,6 +117,13 @@ def read_input_frame(path: str | Path, source: str, index: int) -> tuple[np.ndar
         data = handle["exchange/data"]
         selected = max(0, min(index, data.shape[0] - 1))
         projection = np.asarray(data[selected], dtype=np.float32)
+        from .input_state import resolve
+        state=resolve(path,data_state)
+        if state!='raw':
+            if state=='attenuation' and source=='corrected':raise ValueError('Transmission is unavailable for −Log applied input; view Projection or Attenuation')
+            if source=='attenuation' and state=='normalized':
+                projection=projection.copy();projection[projection<=0]=1;projection=-np.log(projection);projection[np.isnan(projection)]=6;projection[np.isinf(projection)]=0
+            return projection,float(handle['exchange/theta'][selected])
         white_data = handle["exchange/data_white"]
         dark_data = handle["exchange/data_dark"]
         flat = np.mean(white_data[:], axis=0, dtype=np.float32) if white_data.ndim == 3 else np.asarray(white_data[:], np.float32)

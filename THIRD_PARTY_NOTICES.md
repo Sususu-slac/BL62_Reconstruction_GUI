@@ -13,3 +13,6 @@ confidence reward and full-resolution NMS are preserved.
 Other runtime packages retain their respective licenses, which are included
 by their distributions. TomocuPy and ASTRA run in the external reconstruction
 environment; PyTorch and SAM3 run in the external SAM3 environment.
+
+
+The optional Tofu/UFO GPU runtime uses the UFO framework and a modified LGPL-3.0-or-later laminography plugin. The complete compatibility source, kernel sources, build script and license are supplied in tofu_support and in the runtime image. PoCL provides the CUDA-backed OpenCL implementation. The optional runtime is built from an official Ubuntu Base image and an isolated Conda environment; package notices are retained.

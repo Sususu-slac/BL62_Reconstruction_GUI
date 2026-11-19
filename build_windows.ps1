@@ -19,6 +19,7 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name BL62_Recons
  --exclude-module pandas --exclude-module IPython --exclude-module pytest --exclude-module PyQt5 --exclude-module PyQt6 --exclude-module PySide2 app.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
 Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.md' | Copy-Item -Destination (Join-Path $PSScriptRoot 'dist\BL62_Reconstruction_GUI')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'docs') -Destination (Join-Path $PSScriptRoot 'dist\BL62_Reconstruction_GUI\docs') -Recurse -Force
 $iscc=Join-Path $env:LOCALAPPDATA 'BL62-BuildTools\InnoSetup\ISCC.exe'
 if (-not (Test-Path $iscc)) { $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe' }
 if (-not (Test-Path $iscc)) { throw 'Install Inno Setup 6 to build the Windows installer.' }

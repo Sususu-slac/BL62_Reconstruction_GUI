@@ -19,9 +19,10 @@ class ReconMethod(str, Enum):
     CGLS_CUDA = "cgls_cuda"
     LAMINO_FOURIERREC = "lamino_fourierrec"
     LAMINO_LINEREC = "lamino_linerec"
+    LAMINO_TOFU = "lamino_tofu"
 
 
-LAMINO_METHODS = (ReconMethod.LAMINO_FOURIERREC, ReconMethod.LAMINO_LINEREC)
+LAMINO_METHODS = (ReconMethod.LAMINO_FOURIERREC, ReconMethod.LAMINO_LINEREC, ReconMethod.LAMINO_TOFU)
 TOMO_METHODS = tuple(m for m in ReconMethod if m not in LAMINO_METHODS)
 
 
@@ -48,6 +49,7 @@ class ReconJob:
     dezinger: int = 0
     dezinger_threshold: float = 5000
     bright_ratio: float = 1.
+    data_state: str = "raw"
     minus_log: bool = True
     flat_linear: bool = False
     lamino_angle: float = 20.0
@@ -56,8 +58,11 @@ class ReconJob:
     lamino_search_width: float = 5.0
     lamino_search_step: float = 0.25
     uniform_angle_approximation: bool = False
+    tofu_block_slices: int = 0
 
     def validate(self) -> None:
+        from .input_state import validate_options
+        validate_options(self.to_json_dict())
         if self.bright_ratio<=0 or self.dezinger<0 or self.dezinger_threshold<0:raise ValueError('Invalid preprocessing settings')
         if not self.input_path:
             raise ValueError("Select an input HDF5 file")
@@ -80,11 +85,13 @@ class ReconJob:
         if self.search_kind not in ("center", "angle"):
             raise ValueError("Search kind must be center or angle")
         if self.mode == GeometryMode.LAMINOGRAPHY and self.method not in LAMINO_METHODS:
-            raise ValueError("Laminography supports TomocuPy FourierRec or LineRec")
+            raise ValueError("Select a laminography reconstruction method")
         if self.mode == GeometryMode.TOMOGRAPHY and self.method not in TOMO_METHODS:
             raise ValueError("Select a tomography method")
-        if self.reconstruction_type == "try" and self.mode == GeometryMode.LAMINOGRAPHY and self.method != ReconMethod.LAMINO_LINEREC:
-            raise ValueError("Laminography center/angle searches use LineRec")
+        if self.reconstruction_type == "try" and self.mode == GeometryMode.LAMINOGRAPHY and self.method not in (ReconMethod.LAMINO_LINEREC, ReconMethod.LAMINO_TOFU):
+            raise ValueError("Laminography center/angle searches use LineRec or Tofu GPU")
+        if self.tofu_block_slices < 0:
+            raise ValueError("Tofu block size must be zero (automatic) or positive")
         if self.method in (ReconMethod.LINEREC, ReconMethod.LAMINO_LINEREC) and self.chunk_size < 4:
             raise ValueError("LineRec requires chunk size 4 or greater; smaller chunks can produce a zero image")
 

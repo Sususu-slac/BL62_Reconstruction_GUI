@@ -5,6 +5,7 @@ def boolean(value):
     if str(value).lower() not in ('true','false'):raise ValueError('Use True or False')
     return str(value).lower()=='true'
 def add_arguments(parser):
+    parser.add_argument('--data-state',choices=['auto','raw','normalized','attenuation'],default='auto')
     parser.add_argument('--remove-stripe-method',choices=['none','vo-all','fw','ti'],default='vo-all')
     parser.add_argument('--filter','--fbp-filter',dest='filter',default='parzen',choices=['none','ramp','shepp','hann','hamming','parzen','cosine','cosine2'])
     parser.add_argument('--dezinger',type=int,default=0);parser.add_argument('--dezinger-threshold',type=float,default=5000)
@@ -15,6 +16,10 @@ def values(options):
     if 'filter' in source:result['filter_name']=source['filter']
     return result
 def argv(options,external=False):
-    v=values(options);return ['--remove-stripe-method',v['remove_stripe_method'],'--fbp-filter' if external else '--filter',v['filter_name'],
+    from .input_state import effective_options
+    source=effective_options(options);v=values(source);result= ['--remove-stripe-method',v['remove_stripe_method'],'--fbp-filter' if external else '--filter',v['filter_name'],
         '--dezinger',str(v['dezinger']),'--dezinger-threshold',str(int(v['dezinger_threshold'])),'--bright-ratio',str(v['bright_ratio']),
         '--minus-log',str(v['minus_log']),'--flat-linear',str(v['flat_linear'])]
+
+    if not external and source.get('data_state') in ('raw','normalized','attenuation'):result += ['--data-state',source['data_state']]
+    return result

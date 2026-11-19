@@ -159,6 +159,7 @@ class AnalysisUiMixin:
             source=Path(self.analysis_input.text().strip())
             if not self.analysis_input.text().strip():raise ValueError('Select an input HDF5 file')
             info=inspect_hdf5(source)
+            if info.data_state!='raw':raise ValueError('Intelligent analysis currently requires raw projections with Flat/Dark. Use the Reconstruction tab for processed input.')
             mode=self.analysis_prompt_mode.currentData()
             if mode=='text' and not self.analysis_prompt.text().strip():raise ValueError('Enter an analysis target')
             if mode=='instance':

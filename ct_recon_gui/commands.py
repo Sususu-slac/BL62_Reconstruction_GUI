@@ -20,7 +20,7 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
     source = str(job.input_path)
     output = str(job.output_dir)
     if job.mode == GeometryMode.LAMINOGRAPHY:
-        return [
+        command = [
             reconstruction_python(), str(BACKEND_RUNNER), job.method.value, source, output,
             "--reconstruction-type", job.reconstruction_type,
             "--search-kind", job.search_kind,
@@ -35,6 +35,9 @@ def build_wsl_argv(job: ReconJob) -> list[str]:
             "--lamino-search-step", str(job.lamino_search_step),
             "--binning", str(job.binning),
         ] + preprocessing_argv(job.to_json_dict()) + (["--try-row", str(job.try_row)] + (["--inclusive-center-search"] if job.search_kind == "center" else []) if job.reconstruction_type == "try" else [])
+        if job.method == ReconMethod.LAMINO_TOFU and job.tofu_block_slices:
+            command += ['--tofu-block-slices', str(job.tofu_block_slices)]
+        return command
     argv = [
         reconstruction_python(), str(BACKEND_RUNNER), job.method.value, source, output,
         "--reconstruction-type", job.reconstruction_type,

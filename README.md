@@ -1,4 +1,9 @@
+> Version 1.4.0 adds explicit projection preparation states and dedicated Images → H5 / H5 → Images windows. See [the preparation and conversion guide](docs/DATA_PREPARATION_1.4.0.md) and [release notes](docs/RELEASE_1.4.0.md). The November 11 PDF manual remains the base edition.
+
 # BL62 Reconstruction GUI
+
+
+Version **1.3.0** adds **Tofu/UFO GPU (Experimental)** for manual laminography: rotation-center candidates, tilt candidates and full reconstruction. The existing controls, viewer and Safe Stop are reused. Intelligent Data Analysis is unchanged. The optional, per-account WSL2 runtime can be installed automatically on first use from the separately distributed runtime archive; see [Tofu GPU setup and usage](docs/TOFU_GPU.md).
 
 ## Light / Dark
 
@@ -77,10 +82,10 @@ Version 1.0.1: progress identifies the current phase, segmentation explicitly fo
 
 ## User manuals
 
-Latest English illustrated edition: **October 26, 2026**.
+Latest English illustrated edition: **November 11, 2026**, for application **1.3.0**.
 
-- [PDF manual (32 pages)](docs/BL62_Reconstruction_GUI_User_Manual_10262026.pdf)
-- [Editable Word manual](docs/BL62_Reconstruction_GUI_User_Manual_10262026.docx)
+- [PDF manual (23 pages)](docs/BL62_Reconstruction_GUI_User_Manual_11112026.pdf)
+- [Editable Word manual](docs/BL62_Reconstruction_GUI_User_Manual_11112026.docx)
 - [Documentation index](docs/README.md)
 
 ## Cross-image Instance target (test feature)

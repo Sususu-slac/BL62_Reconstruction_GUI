@@ -7,6 +7,7 @@ import tifffile
 from PySide6.QtCore import Qt, QObject, QRunnable, QThreadPool, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
+from shiboken6 import isValid
 
 
 def normalize_uint8(image: np.ndarray) -> np.ndarray:
@@ -36,7 +37,12 @@ class TiffPreview(QRunnable):
             result = (self.generation, self.path, gray, None)
         except Exception as error:
             result = (self.generation, self.path, None, str(error))
-        self.signals.ready.emit(result)
+        try:
+            self.signals.ready.emit(result)
+        except RuntimeError:
+            # Qt may dispose signal objects while the application is closing.
+            # A completed background decode must not call into a deleted object.
+            if isValid(self.signals):raise
 
 
 class ImageView(QLabel):
