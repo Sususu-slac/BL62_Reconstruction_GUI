@@ -2,6 +2,11 @@
 
 # BL62 Reconstruction GUI
 
+## Copyright and permissions / 版权与使用授权
+
+本项目原创代码保留所有权利。公开展示不代表授予使用、修改或再分发许可。研究、发表及商业用途请事先联系项目维护者取得书面授权。第三方组件仍适用各自许可证。
+
+All rights are reserved in this project's original code. Public availability does not itself grant permission to use, modify, or redistribute that code. Research, publication, and commercial uses require prior written authorization from the project maintainer. Third-party components remain subject to their respective licenses.
 
 Version **1.3.0** adds **Tofu/UFO GPU (Experimental)** for manual laminography: rotation-center candidates, tilt candidates and full reconstruction. The existing controls, viewer and Safe Stop are reused. Intelligent Data Analysis is unchanged. The optional, per-account WSL2 runtime can be installed automatically on first use from the separately distributed runtime archive; see [Tofu GPU setup and usage](docs/TOFU_GPU.md).
 
