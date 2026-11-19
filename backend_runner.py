@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-if os.name == 'nt':
+if os.name == 'nt' and (Path(sys.prefix)/'Library/bin').is_dir():
     _library = str(Path(sys.prefix)/'Library/bin')
     os.environ['PATH'] = _library+';'+os.environ.get('PATH','')
     _dll_directory = os.add_dll_directory(_library)
